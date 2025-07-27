@@ -1,0 +1,56 @@
+[package]
+name = "pipewire-volume-mixer-daemon"
+version = "0.1.0"
+edition = "2021"
+authors = ["PipeWire Volume Mixer Contributors"]
+description = "High-performance daemon for PipeWire volume mixer"
+license = "GPL-3.0"
+
+[lib]
+name = "pipewire_volume_mixer_daemon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pipewire-volume-mixer-daemon"
+path = "src/main.rs"
+
+[[bin]]
+name = "test-daemon"
+path = "src/main_test.rs"
+
+[dependencies]
+pipewire = { version = "0.8", default-features = false }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+memmap2 = "0.9"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"
+dashmap = "5.5"
+atomic = "0.6"
+nix = { version = "0.27", features = ["fs", "process", "user"] }
+toml = "0.8"
+
+[build-dependencies]
+pkg-config = "0.3"
+
+[dev-dependencies]
+criterion = "0.5"
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+debug = false
+strip = true
+panic = "abort"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = false
+

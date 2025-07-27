@@ -18,9 +18,11 @@
 
 const { Gtk } = imports.gi;
 
+// eslint-disable-next-line no-unused-vars
 function init() {
 }
 
+// eslint-disable-next-line no-unused-vars
 function buildPrefsWidget() {
     // Create a parent widget that we'll return from this function
     let prefsWidget = new Gtk.Box({

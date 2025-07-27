@@ -1,0 +1,5 @@
+# Clippy linting configuration
+msrv = "1.70.0"
+
+# Allow some common patterns
+allow-unwrap-in-tests = true

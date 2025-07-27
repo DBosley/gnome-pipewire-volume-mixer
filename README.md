@@ -6,25 +6,43 @@ A GNOME Shell extension that adds virtual audio sink controls to the system volu
 
 - Adds Game, Chat, and Media volume sliders to the GNOME volume menu
 - Control volume independently for each virtual sink
-- Route applications to different sinks using the included mixer-control script
+- Route applications to different sinks with a simple GUI
+- High-performance daemon with native PipeWire integration
+- Zero-latency UI updates using shared memory
 - Works with PipeWire's loopback modules to maintain audio routing
 
 ## Requirements
 
 - GNOME Shell 42+ (tested on Pop!_OS 22.04)
 - PipeWire audio system
+- Rust toolchain (for building the daemon)
 - PipeWire loopback module configuration (see Installation)
 
 ## Installation
 
-### 1. Install the Extension
+### 1. Install the Daemon
+
+The extension requires a high-performance daemon for PipeWire integration:
 
 ```bash
-# Copy to GNOME extensions directory
-cp -r . ~/.local/share/gnome-shell/extensions/virtual-audio-sinks@dave/
+# Build and install the daemon
+make daemon-install
 
-# Enable the extension
-gnome-extensions enable virtual-audio-sinks@dave
+# Start the daemon
+make daemon-start
+
+# Check daemon status
+make daemon-status
+```
+
+### 2. Install the Extension
+
+```bash
+# Install the extension
+make install
+
+# Enable and restart GNOME Shell
+make enable restart
 ```
 
 ### 2. Configure PipeWire Virtual Sinks

@@ -1,0 +1,42 @@
+# PipeWire Volume Mixer Daemon Configuration
+
+[cache]
+# How often to update shared memory (milliseconds)
+update_interval_ms = 100
+# Maximum number of apps to remember routing preferences for
+max_remembered_apps = 50
+
+[routing]
+# Enable automatic routing based on app names
+enable_auto_routing = true
+# Default sink for new applications
+default_sink = "Game"
+
+# Custom routing rules (app_name = sink_name)
+[routing.rules]
+# Examples:
+# firefox = "Media"
+# discord = "Chat"
+# steam = "Game"
+
+[performance]
+# Debounce delay for PipeWire events (milliseconds)
+event_debounce_ms = 50
+# Maximum events to process per second
+max_events_per_second = 100
+
+# Virtual sink definitions
+[[virtual_sinks]]
+name = "Game"
+display_name = "Game"
+icon = "applications-games-symbolic"
+
+[[virtual_sinks]]
+name = "Chat"
+display_name = "Chat"
+icon = "user-available-symbolic"
+
+[[virtual_sinks]]
+name = "Media"
+display_name = "Media"
+icon = "applications-multimedia-symbolic"

@@ -28,7 +28,12 @@ export const mockSubprocess = {
 };
 
 export const mockVolumeMenu = {
-  addMenuItem: jest.fn()
+  addMenuItem: jest.fn(),
+  menu: {
+    connect: jest.fn().mockReturnValue(1),
+    disconnect: jest.fn(),
+    emit: jest.fn()
+  }
 };
 
 export const createMockImports = () => ({
@@ -84,9 +89,21 @@ export const createMockImports = () => ({
       },
       SubprocessFlags: {
         STDOUT_PIPE: 'stdout_pipe'
-      }
+      },
+      File: {
+        new_for_path: jest.fn()
+      },
+      SocketClient: {
+        new: jest.fn()
+      },
+      UnixSocketAddress: jest.fn()
     },
-    GLib: {}
+    GLib: {
+      get_user_runtime_dir: jest.fn().mockReturnValue('/run/user/1000'),
+      timeout_add: jest.fn().mockReturnValue(1),
+      PRIORITY_DEFAULT: 0,
+      SOURCE_REMOVE: false
+    }
   },
   ui: {
     main: {
@@ -122,7 +139,7 @@ export const createMockImports = () => ({
         }
       },
       PopupSubMenuMenuItem: class MockPopupSubMenuMenuItem {
-        constructor(text, wantIcon) {
+        constructor(text, _wantIcon) {
           this._mockChildren = [];
           this._mockSignals = new Map();
           this.label = { text, hide: jest.fn(), destroy: jest.fn() };
@@ -143,13 +160,13 @@ export const createMockImports = () => ({
         add_child(child) {
           this._mockChildren.push(child);
         }
-        remove_child(child) {
+        remove_child(_child) {
           // Mock remove_child
         }
         insert_child_at_index(child, index) {
           this._mockChildren.splice(index, 0, child);
         }
-        insert_child_below(child, sibling) {
+        insert_child_below(child, _sibling) {
           this._mockChildren.push(child);
         }
         get_first_child() {
@@ -164,7 +181,7 @@ export const createMockImports = () => ({
           this._destroyed = true;
         }
       },
-      PopupMenuItem: jest.fn().mockImplementation(function(text, params) {
+      PopupMenuItem: jest.fn().mockImplementation(function(text, _params) {
         this.text = text;
         this.sensitive = true;
         this.connect = jest.fn();
@@ -176,6 +193,18 @@ export const createMockImports = () => ({
     slider: {
       Slider: jest.fn().mockImplementation(function(value) {
         return Object.assign({}, mockSlider, { value });
+      })
+    }
+  },
+  misc: {
+    extensionUtils: {
+      getCurrentExtension: jest.fn().mockReturnValue({
+        imports: {
+          daemonBackend: {},
+          legacyBackend: {},
+          sharedMemory: {},
+          ipcClient: {}
+        }
       })
     }
   }

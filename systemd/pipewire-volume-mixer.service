@@ -1,0 +1,36 @@
+[Unit]
+Description=PipeWire Volume Mixer Daemon
+Documentation=https://github.com/DBosley/gnome-pipewire-volume-mixer
+After=pipewire.service
+Requires=pipewire.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pipewire-volume-mixer-daemon
+Restart=on-failure
+RestartSec=5
+
+# Performance
+Nice=-10
+IOSchedulingClass=realtime
+IOSchedulingPriority=7
+
+# Security
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+NoNewPrivileges=true
+ReadWritePaths=/run/user/%u /dev/shm
+
+# Resource limits
+MemoryMax=50M
+CPUQuota=10%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pipewire-volume-mixer
+
+[Install]
+WantedBy=default.target
