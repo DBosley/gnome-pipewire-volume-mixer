@@ -165,17 +165,11 @@ check_dependencies() {
         print_success "Rust/Cargo is installed"
     fi
     
-    # Check for Node.js/npm
-    if ! command_exists node || ! command_exists npm; then
-        print_warning "Node.js/npm not found"
-        case "$DISTRO" in
-            ubuntu|debian|pop|linuxmint) package_names+=("nodejs" "npm") ;;
-            fedora) package_names+=("nodejs" "npm") ;;
-            arch|manjaro|endeavouros) package_names+=("nodejs" "npm") ;;
-            opensuse*) package_names+=("nodejs" "npm") ;;
-        esac
+    # Check for Bun (for development, not required for installation)
+    if ! command_exists bun; then
+        print_info "Bun not found (only needed for development)"
     else
-        print_success "Node.js/npm is installed"
+        print_success "Bun is installed"
     fi
     
     # Check for make

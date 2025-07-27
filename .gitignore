@@ -1,6 +1,5 @@
 # Node modules
 node_modules/
-package-lock.json
 bun.lockb
 
 # Build artifacts

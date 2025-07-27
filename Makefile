@@ -117,7 +117,7 @@ test: extension-test daemon-test
 
 extension-test:
 	@echo "Running extension tests..."
-	@npm test
+	@bun test
 
 daemon-test:
 	@echo "Running daemon tests..."
@@ -129,7 +129,7 @@ lint: extension-lint daemon-lint
 
 extension-lint:
 	@echo "Running extension linter..."
-	@npm run lint
+	@bun run lint
 
 daemon-lint:
 	@echo "Running daemon linter..."

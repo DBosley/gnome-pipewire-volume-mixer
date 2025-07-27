@@ -42,18 +42,21 @@ A GNOME Shell extension that adds virtual audio sinks to PipeWire, allowing you 
 2. Install build dependencies:
    ```bash
    # Ubuntu/Debian
-   sudo apt install cargo nodejs npm pipewire libpipewire-0.3-dev pkg-config
+   sudo apt install cargo pipewire libpipewire-0.3-dev pkg-config
+   curl -fsSL https://bun.sh/install | bash
 
    # Fedora
-   sudo dnf install cargo nodejs npm pipewire pipewire-devel pkg-config
+   sudo dnf install cargo pipewire pipewire-devel pkg-config
+   curl -fsSL https://bun.sh/install | bash
 
    # Arch
-   sudo pacman -S rust nodejs npm pipewire pkg-config
+   sudo pacman -S rust pipewire pkg-config
+   curl -fsSL https://bun.sh/install | bash
    ```
 
 3. Build and install:
    ```bash
-   npm install
+   bun install
    make daemon-build
    sudo make daemon-install
    make install
