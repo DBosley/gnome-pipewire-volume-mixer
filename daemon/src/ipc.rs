@@ -86,10 +86,25 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
             // Update routing rule
             cache.write().await.routing_rules.insert(app_name.to_string(), sink_name.to_string());
 
-            // TODO: Actually move the stream in PipeWire
-            // This will be implemented in pipewire_monitor.rs
-
-            Ok(format!("Routed {app_name} to {sink_name}"))
+            // Actually move the stream in PipeWire
+            let result = route_app_to_sink(app_name, sink_name).await;
+            match result {
+                Ok(_) => {
+                    // Update the app's current sink in cache properly
+                    let cache_read = cache.read().await;
+                    let app_clone = cache_read.apps.get(app_name).map(|app_ref| app_ref.value().clone());
+                    drop(cache_read);
+                    
+                    if let Some(mut app) = app_clone {
+                        app.current_sink = sink_name.to_string();
+                        // Use the proper update method to increment generation
+                        cache.write().await.update_app(app_name.to_string(), app);
+                    }
+                    
+                    Ok(format!("Routed {app_name} to {sink_name}"))
+                },
+                Err(e) => bail!("Failed to route {app_name} to {sink_name}: {e}")
+            }
         }
 
         "SET_VOLUME" => {
@@ -231,4 +246,126 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
             bail!("Unknown command: {}", parts[0]);
         }
     }
+}
+
+async fn route_app_to_sink(app_name: &str, sink_name: &str) -> Result<()> {
+    debug!("Attempting to route {} to {}", app_name, sink_name);
+    
+    // First, find all sink input IDs for the app
+    let sink_inputs_output = tokio::process::Command::new("pactl")
+        .args(["list", "sink-inputs"])
+        .output()
+        .await?;
+
+    if !sink_inputs_output.status.success() {
+        bail!("Failed to list sink inputs");
+    }
+
+    let stdout = String::from_utf8_lossy(&sink_inputs_output.stdout);
+    let mut sink_input_ids = Vec::new();
+
+    // Parse sink inputs to find all streams for our app
+    let blocks: Vec<&str> = stdout.split("Sink Input #").collect();
+    
+    for block in blocks.iter().skip(1) {  // Skip first empty block
+        if let Some(id_str) = block.lines().next() {
+            if let Ok(id) = id_str.trim().parse::<u32>() {
+                let app_name_lower = app_name.to_lowercase();
+                
+                // Check for application.process.binary match
+                for line in block.lines() {
+                    if let Some(binary_line) = line.trim().strip_prefix("application.process.binary = \"") {
+                        if let Some(binary_end) = binary_line.find('"') {
+                            let binary_path = &binary_line[..binary_end];
+                            let binary_name = binary_path.split('/')
+                                .next_back()
+                                .unwrap_or(binary_path)
+                                .trim_end_matches("-bin")
+                                .trim_end_matches(".exe")
+                                .to_lowercase();
+                            
+                            debug!("Checking binary name '{}' against app name '{}'", binary_name, app_name_lower);
+                            
+                            if binary_name == app_name_lower {
+                                debug!("Found {} sink input: {} (binary match)", app_name, id);
+                                sink_input_ids.push(id);
+                                break;
+                            }
+                        }
+                    }
+                    // Also check application.name as fallback
+                    else if line.contains("application.name = \"") {
+                        if let Some(name_start) = line.find('"') {
+                            let name_line = &line[name_start+1..];
+                            if let Some(name_end) = name_line.find('"') {
+                                let name = name_line[..name_end].to_lowercase();
+                                if name.contains(&app_name_lower) {
+                                    debug!("Found {} sink input: {} (name match)", app_name, id);
+                                    sink_input_ids.push(id);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if sink_input_ids.is_empty() {
+        bail!("Could not find any sink inputs for app: {}", app_name);
+    }
+
+    // Now find the sink ID for the target sink
+    let sinks_output = tokio::process::Command::new("pactl")
+        .args(["list", "sinks", "short"])
+        .output()
+        .await?;
+
+    if !sinks_output.status.success() {
+        bail!("Failed to list sinks");
+    }
+
+    let sinks_stdout = String::from_utf8_lossy(&sinks_output.stdout);
+    let mut target_sink_id = None;
+
+    for line in sinks_stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 && parts[1] == sink_name {
+            if let Ok(sink_id) = parts[0].parse::<u32>() {
+                target_sink_id = Some(sink_id);
+                break;
+            }
+        }
+    }
+
+    let sink_id = target_sink_id.ok_or_else(|| {
+        anyhow::anyhow!("Could not find sink: {}", sink_name)
+    })?;
+
+    // Move all sink inputs for this app to the target sink
+    let mut success_count = 0;
+    let mut errors = Vec::new();
+    
+    for input_id in sink_input_ids {
+        let move_output = tokio::process::Command::new("pactl")
+            .args(["move-sink-input", &input_id.to_string(), &sink_id.to_string()])
+            .output()
+            .await?;
+
+        if move_output.status.success() {
+            success_count += 1;
+            debug!("Moved sink input {} to {}", input_id, sink_name);
+        } else {
+            let error_msg = String::from_utf8_lossy(&move_output.stderr);
+            errors.push(format!("Failed to move input {input_id}: {error_msg}"));
+        }
+    }
+    
+    if success_count == 0 {
+        bail!("Failed to move any sink inputs: {:?}", errors);
+    }
+
+    info!("Successfully routed {} ({} streams) to {} (sink #{})", app_name, success_count, sink_name, sink_id);
+    Ok(())
 }

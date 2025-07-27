@@ -155,21 +155,32 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
                 let label = app.active ? app.displayName : `[${app.displayName}]`;
                 let item = new PopupMenu.PopupMenuItem(label);
                 
-                item.connect('activate', async () => {
+                let isRouting = false; // Prevent multiple rapid clicks
+                
+                // Override the activate behavior to prevent menu closing
+                item.activate = async () => {
+                    if (isRouting) return;
+                    
                     try {
+                        isRouting = true;
                         await backend.routeApp(app.name, this._sink.name);
                         
-                        // Update UI after routing
-                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+                        // Give backend time to update
+                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+                            // Update all sinks first
                             updateAllSinks();
+                            
+                            // Rebuild the application list in the dropdown
+                            this._updateApplicationList(this._sinkSelector.menu);
+                            
+                            isRouting = false;
                             return GLib.SOURCE_REMOVE;
                         });
-                        
-                        menu.close();
                     } catch (e) {
                         log(`Virtual Audio Sinks: Error routing app: ${e}`);
+                        isRouting = false;
                     }
-                });
+                };
                 
                 menu.addMenuItem(item);
             });

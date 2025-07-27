@@ -19,9 +19,9 @@ pub struct PipeWireMonitor {
 }
 
 enum CacheUpdate {
-    UpdateApp(String, AppInfo),
     UpdateSink(String, SinkInfo),
     MarkAppInactive(String, u32),
+    AddSinkInputToApp(String, u32, String), // app_display_name, sink_input_id, current_sink
 }
 
 struct MonitorState {
@@ -77,13 +77,34 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
             while let Ok(update) = cache_rx.recv() {
                 let cache = cache_clone.write().await;
                 match update {
-                    CacheUpdate::UpdateApp(name, info) => cache.update_app(name, info),
                     CacheUpdate::UpdateSink(name, info) => cache.update_sink(name, info),
                     CacheUpdate::MarkAppInactive(app_name, id) => {
                         if let Some(mut app) = cache.apps.get_mut(&app_name) {
                             app.active = false;
                             app.sink_input_ids.retain(|&x| x != id);
                         }
+                    }
+                    CacheUpdate::AddSinkInputToApp(app_name, sink_input_id, current_sink) => {
+                        if let Some(mut app) = cache.apps.get_mut(&app_name) {
+                            if !app.sink_input_ids.contains(&sink_input_id) {
+                                app.sink_input_ids.push(sink_input_id);
+                            }
+                            // Update sink if it's different (in case of multiple streams)
+                            if app.current_sink != current_sink && app.current_sink != "Unknown" {
+                                debug!("App {} has streams in multiple sinks", app_name);
+                            }
+                        } else {
+                            // App doesn't exist yet, create it with minimal info
+                            let app_info = AppInfo {
+                                display_name: app_name.clone(),
+                                binary_name: app_name.to_lowercase(),
+                                current_sink,
+                                active: true,
+                                sink_input_ids: vec![sink_input_id],
+                            };
+                            cache.update_app(app_name, app_info);
+                        }
+                        cache.increment_generation();
                     }
                 }
             }
@@ -196,8 +217,8 @@ fn handle_global(
         }
     }
 
-    // Check if this is an audio stream
-    if media_class == "Stream/Output/Audio" || media_class == "Stream/Input/Audio" {
+    // Check if this is an audio output stream (ignore input streams)
+    if media_class == "Stream/Output/Audio" {
         // Skip loopback streams (check multiple properties)
         if node_name.contains("_to_") || node_name.ends_with("_Loopback") {
             return;
@@ -216,48 +237,151 @@ fn handle_global(
             .unwrap_or_default()
             .to_string();
 
-        let binary_name = props.get("application.process.binary").map(|s| {
-            s.split('/')
-                .next_back()
-                .unwrap_or(s)
-                .trim_end_matches("-bin")
-                .trim_end_matches(".exe")
-                .to_string()
-        });
+        // Debug: Log all application.* properties
+        if !app_name.is_empty() {
+            debug!("App properties for {}:", app_name);
+            for (key, value) in props.iter() {
+                if key.starts_with("application.") {
+                    debug!("  {}: {}", key, value);
+                }
+            }
+        }
 
-        let display_name = binary_name
-            .as_ref()
-            .unwrap_or(&app_name)
-            .chars()
-            .take(1)
-            .flat_map(char::to_uppercase)
-            .chain(binary_name.as_ref().unwrap_or(&app_name).chars().skip(1))
-            .collect::<String>();
+        // Binary name extraction will happen in the async thread with pactl
 
+        // We'll determine the final name later after checking pactl
         let node_info = NodeInfo {
-            app_name: Some(display_name.clone()),
+            app_name: Some(app_name.clone()),
         };
 
         state.nodes.insert(id, node_info);
 
-        // Check if we should auto-route this app
-        if state.config.routing.enable_auto_routing {
-            // TODO: Implement actual routing
-            let target_sink = state.config.routing.default_sink.clone();
-            info!("Would route {} to {}", display_name, target_sink);
-        }
+        // Auto-routing will be handled after we know the binary name
 
-        // Update cache
-        let app_info = AppInfo {
-            display_name: display_name.clone(),
-            binary_name: binary_name.unwrap_or_default(),
-            current_sink: "Unknown".to_string(), // Will be updated
-            active: true,
-            sink_input_ids: vec![id],
-        };
-
-        // Send update through channel
-        let _ = state.cache_tx.send(CacheUpdate::UpdateApp(display_name, app_info));
+        // Get object.serial for pactl lookup
+        let serial_id = props.get("object.serial")
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(id);
+        
+        // Get sink connection info asynchronously
+        let app_id = serial_id;
+        let app_name_for_log = app_name.clone();
+        let cache_tx = state.cache_tx.clone();
+        
+        std::thread::spawn(move || {
+            debug!("Looking up sink for app {} with ID {}", app_name_for_log, app_id);
+            
+            // Also try to get the binary name from pactl (more complete than PipeWire properties)
+            let mut extracted_binary_name = None;
+            if let Ok(pactl_output) = std::process::Command::new("pactl")
+                .args(["list", "sink-inputs"])
+                .output()
+            {
+                if pactl_output.status.success() {
+                    let stdout = String::from_utf8_lossy(&pactl_output.stdout);
+                    let search_pattern = format!("Sink Input #{app_id}");
+                    if let Some(pos) = stdout.find(&search_pattern) {
+                        // Look for application.process.binary in the next several lines
+                        let lines = stdout[pos..].lines().take(30);
+                        for line in lines {
+                            if let Some(binary_line) = line.trim().strip_prefix("application.process.binary = \"") {
+                                if let Some(binary_end) = binary_line.find('"') {
+                                    let binary_path = &binary_line[..binary_end];
+                                    let extracted = binary_path.split('/')
+                                        .next_back()
+                                        .unwrap_or(binary_path)
+                                        .trim_end_matches("-bin")
+                                        .trim_end_matches(".exe");
+                                    if !extracted.is_empty() {
+                                        extracted_binary_name = Some(extracted.to_string());
+                                        debug!("Found binary name from pactl: {}", extracted);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Get sink info using pactl
+            if let Ok(output) = std::process::Command::new("pactl")
+                .args(["list", "sink-inputs"])
+                .output()
+            {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    
+                    // Find our sink input by ID
+                    let search_pattern = format!("Sink Input #{app_id}");
+                    if let Some(pos) = stdout.find(&search_pattern) {
+                        // Look for the Sink: line in the next several lines
+                        let lines = stdout[pos..].lines().take(10);
+                        for line in lines {
+                            if let Some(sink_id_str) = line.trim().strip_prefix("Sink:") {
+                                if let Ok(sink_id) = sink_id_str.trim().parse::<u32>() {
+                                    // Get sink name
+                                    if let Ok(sink_output) = std::process::Command::new("pactl")
+                                        .args(["list", "sinks"])
+                                        .output()
+                                    {
+                                        let sink_stdout = String::from_utf8_lossy(&sink_output.stdout);
+                                        let sink_search = format!("Sink #{sink_id}");
+                                        if let Some(sink_pos) = sink_stdout.find(&sink_search) {
+                                            // Find the Name: line
+                                            for line in sink_stdout[sink_pos..].lines().take(10) {
+                                                if let Some(name) = line.trim().strip_prefix("Name:") {
+                                                    let sink_name = name.trim().to_string();
+                                                    info!("Found app {} connected to sink {}", app_name_for_log, sink_name);
+                                                    // Use extracted binary name if available, otherwise fall back
+                                                    let final_display_name = extracted_binary_name
+                                                        .as_ref()
+                                                        .map(|name| {
+                                                            // Capitalize first letter
+                                                            let mut chars = name.chars();
+                                                            match chars.next() {
+                                                                None => String::new(),
+                                                                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                                                            }
+                                                        })
+                                                        .unwrap_or_else(|| app_name_for_log.clone());
+                                                    
+                                                    // Use the capitalized display name as the key for consistency
+                                                    let final_key = final_display_name.clone();
+                                                    
+                                                    // Always use AddSinkInputToApp - it will create the app if needed
+                                                    let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(final_key, app_id, sink_name));
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Fallback if we couldn't get sink info
+            let final_display_name = extracted_binary_name
+                .as_ref()
+                .map(|name| {
+                    // Capitalize first letter
+                    let mut chars = name.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    }
+                })
+                .unwrap_or_else(|| app_name_for_log.clone());
+            
+            // Use the capitalized display name as the key for consistency
+            let final_key = final_display_name.clone();
+            
+            // Always use AddSinkInputToApp - it will create the app if needed
+            let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(final_key, app_id, "Unknown".to_string()));
+        });
     }
 }
 

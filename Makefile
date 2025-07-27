@@ -4,9 +4,9 @@ EXTENSION_UUID = pipewire-volume-mixer@extensions.gnome
 EXTENSION_DIR = $(HOME)/.local/share/gnome-shell/extensions/$(EXTENSION_UUID)
 SRC_DIR = src
 FILES = $(SRC_DIR)/extension.js $(SRC_DIR)/metadata.json $(SRC_DIR)/stylesheet.css $(SRC_DIR)/prefs.js \
-        $(SRC_DIR)/daemonBackend.js $(SRC_DIR)/legacyBackend.js $(SRC_DIR)/sharedMemory.js $(SRC_DIR)/ipcClient.js
+        $(SRC_DIR)/daemonBackend.js $(SRC_DIR)/sharedMemory.js $(SRC_DIR)/ipcClient.js
 
-.PHONY: all install uninstall enable disable restart package clean daemon-build daemon-install daemon-start daemon-stop daemon-status daemon-restart daemon-reload
+.PHONY: all install uninstall enable disable restart reload package clean daemon-build daemon-install daemon-start daemon-stop daemon-status daemon-restart daemon-reload daemon-logs daemon-logs-recent daemon-check reinstall
 
 all: install enable restart
 
@@ -79,3 +79,34 @@ daemon-restart: daemon-stop daemon-build daemon-install daemon-start
 
 daemon-reload: daemon-restart
 	@echo "Alias for daemon-restart"
+
+# Helpful development targets
+reload: disable enable
+	@echo "Extension reloaded (may need manual GNOME Shell restart)"
+
+reinstall: install reload
+	@echo "Extension reinstalled and reloaded"
+
+daemon-logs-recent:
+	@journalctl --user -u pipewire-volume-mixer-daemon.service -n 100 --no-pager
+
+daemon-check:
+	@echo "Checking daemon status..."
+	@systemctl --user is-active pipewire-volume-mixer-daemon.service || echo "Daemon is not running!"
+	@echo "Checking shared memory..."
+	@ls -la /dev/shm/pipewire-volume-mixer-* 2>/dev/null || echo "No shared memory file found!"
+	@echo "Checking socket..."
+	@ls -la /run/user/$$UID/pipewire-volume-mixer.sock 2>/dev/null || echo "No socket file found!"
+
+# Development workflow shortcuts
+dev-reload: daemon-restart reinstall
+	@echo "Full development reload complete!"
+
+# Debug helpers
+debug-shm:
+	@echo "Shared memory contents:"
+	@xxd /dev/shm/pipewire-volume-mixer-$$UID 2>/dev/null | head -20 || echo "No shared memory file found!"
+
+debug-apps:
+	@echo "Current audio applications:"
+	@pactl list sink-inputs | grep -E "(Sink Input|Sink:|application.name)" | head -30
