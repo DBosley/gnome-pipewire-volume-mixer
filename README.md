@@ -1,232 +1,105 @@
 # GNOME PipeWire Volume Mixer
 
-A GNOME Shell extension that adds virtual audio sink controls to the system volume menu, allowing you to route and control audio for different applications separately (similar to Windows audio mixer functionality).
+A GNOME Shell extension that adds virtual audio sinks to PipeWire, allowing you to control volumes for different types of applications separately (like games, media, and voice chat).
 
 ## Features
 
-- Adds Game, Chat, and Media volume sliders to the GNOME volume menu
-- Control volume independently for each virtual sink
-- Route applications to different sinks with a simple GUI
-- High-performance daemon with native PipeWire integration
-- Zero-latency UI updates using shared memory
-- Works with PipeWire's loopback modules to maintain audio routing
+- **Virtual Audio Sinks**: Create separate volume controls for different application categories
+- **Application Routing**: Route any application to any virtual sink
+- **Persistent Settings**: Remember application routing preferences across restarts
+- **Real-time Control**: Adjust volumes and mute states for each virtual sink independently
+- **High Performance**: Rust daemon with shared memory for minimal overhead
 
 ## Requirements
 
-- GNOME Shell 42+ (tested on Pop!_OS 22.04)
+- GNOME 40 or higher
 - PipeWire audio system
-- Rust toolchain (for building the daemon)
-- PipeWire loopback module configuration (see Installation)
+- WirePlumber
 
 ## Installation
 
-### 1. Install the Daemon
+### From Release (Recommended)
 
-The extension requires a high-performance daemon for PipeWire integration:
+1. Download the latest release from the [Releases page](https://github.com/yourusername/gnome-pipewire-volume-mixer/releases)
+2. Extract the archive:
+   ```bash
+   tar -xzf gnome-pipewire-volume-mixer-linux-x64.tar.gz
+   cd gnome-pipewire-volume-mixer
+   ```
+3. Run the installer:
+   ```bash
+   ./install.sh
+   ```
 
-```bash
-# Build and install the daemon
-make daemon-install
+### From Source
 
-# Start the daemon
-make daemon-start
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/yourusername/gnome-pipewire-volume-mixer.git
+   cd gnome-pipewire-volume-mixer
+   ```
 
-# Check daemon status
-make daemon-status
-```
+2. Install build dependencies:
+   ```bash
+   # Ubuntu/Debian
+   sudo apt install cargo nodejs npm pipewire libpipewire-0.3-dev pkg-config
 
-### 2. Install the Extension
+   # Fedora
+   sudo dnf install cargo nodejs npm pipewire pipewire-devel pkg-config
 
-```bash
-# Install the extension
-make install
+   # Arch
+   sudo pacman -S rust nodejs npm pipewire pkg-config
+   ```
 
-# Enable and restart GNOME Shell
-make enable restart
-```
-
-### 2. Configure PipeWire Virtual Sinks
-
-Create the virtual sinks configuration:
-
-```bash
-mkdir -p ~/.config/pipewire/pipewire.conf.d/
-```
-
-Create `~/.config/pipewire/pipewire.conf.d/10-virtual-sinks.conf`:
-
-```
-context.objects = [
-    {
-        factory = adapter
-        args = {
-            factory.name = support.null-audio-sink
-            media.class = Audio/Sink
-            node.name = "Game"
-            node.description = "Game Audio"
-            audio.position = [ FL FR ]
-            adapter.auto-port-config = {
-                mode = dsp
-                monitor = true
-                position = preserve
-            }
-        }
-    }
-    {
-        factory = adapter
-        args = {
-            factory.name = support.null-audio-sink
-            media.class = Audio/Sink
-            node.name = "Chat"
-            node.description = "Chat Audio"
-            audio.position = [ FL FR ]
-            adapter.auto-port-config = {
-                mode = dsp
-                monitor = true
-                position = preserve
-            }
-        }
-    }
-    {
-        factory = adapter
-        args = {
-            factory.name = support.null-audio-sink
-            media.class = Audio/Sink
-            node.name = "Media"
-            node.description = "Media Audio"
-            audio.position = [ FL FR ]
-            adapter.auto-port-config = {
-                mode = dsp
-                monitor = true
-                position = preserve
-            }
-        }
-    }
-]
-```
-
-### 3. Configure PipeWire Loopback Modules
-
-Create `~/.config/pipewire/pipewire.conf.d/20-audio-mixing.conf`:
-
-```
-context.modules = [
-    {
-        name = libpipewire-module-loopback
-        args = {
-            node.description = "Game Audio Loopback"
-            capture.props = {
-                node.name = "Game_Loopback"
-                node.target = "Game"
-                stream.capture.sink = true
-            }
-            playback.props = {
-                node.name = "Game_to_Speaker"
-            }
-        }
-    }
-    {
-        name = libpipewire-module-loopback
-        args = {
-            node.description = "Chat Audio Loopback"
-            capture.props = {
-                node.name = "Chat_Loopback"
-                node.target = "Chat"
-                stream.capture.sink = true
-            }
-            playback.props = {
-                node.name = "Chat_to_Speaker"
-            }
-        }
-    }
-    {
-        name = libpipewire-module-loopback
-        args = {
-            node.description = "Media Audio Loopback"
-            capture.props = {
-                node.name = "Media_Loopback"
-                node.target = "Media"
-                stream.capture.sink = true
-            }
-            playback.props = {
-                node.name = "Media_to_Speaker"
-            }
-        }
-    }
-]
-```
-
-### 4. Restart PipeWire
-
-```bash
-systemctl --user restart pipewire pipewire-pulse
-```
-
-### 5. Install the Mixer Control Script (Optional)
-
-Create `~/.local/bin/mixer-control`:
-
-```bash
-#!/bin/bash
-# Control mixer volumes and route applications
-
-case "$1" in
-    route)
-        # Route an app to a specific sink
-        # Usage: mixer-control route <app-name> <game|chat|media>
-        APP="$2"
-        SINK="$3"
-        
-        case "$SINK" in
-            game) TARGET="Game" ;;
-            chat) TARGET="Chat" ;;
-            media) TARGET="Media" ;;
-            *) echo "Invalid sink: $SINK"; exit 1 ;;
-        esac
-        
-        # Find the app's stream and move it
-        pactl list sink-inputs | grep -B20 -i "$APP" | grep "Sink Input" | cut -d'#' -f2 | while read id; do
-            pactl move-sink-input "$id" "$TARGET"
-            echo "Moved $APP to $TARGET"
-        done
-        ;;
-    *)
-        echo "Usage: mixer-control route <app-name> {game|chat|media}"
-        ;;
-esac
-```
-
-Make it executable:
-```bash
-chmod +x ~/.local/bin/mixer-control
-```
+3. Build and install:
+   ```bash
+   npm install
+   make daemon-build
+   sudo make daemon-install
+   make install
+   ```
 
 ## Usage
 
-1. Click on the volume icon in the system tray
-2. You'll see three new sliders: Game, Chat, and Media
-3. Route applications to different sinks:
-   ```bash
-   mixer-control route firefox media
-   mixer-control route discord chat
-   mixer-control route steam game
-   ```
-4. Adjust the volume for each sink independently
+1. After installation, restart GNOME Shell (Alt+F2, type 'r', press Enter)
+2. Open the system volume menu - you'll see new sliders for Game, Media, and Chat
+3. Click the dropdown arrow next to each slider to route applications
+4. Applications will remember their routing even after they stop playing
 
-## How It Works
+## Configuration
 
-The extension creates virtual PipeWire sinks that applications can output to. Loopback modules then route audio from these virtual sinks to your actual audio output. The extension controls both the virtual sink volumes and the loopback stream volumes to ensure the volume sliders work correctly.
+The daemon configuration is stored in `/etc/pipewire-volume-mixer/config.toml`. You can customize the virtual sinks by editing this file.
 
 ## Troubleshooting
 
-- If you don't hear audio after routing an app, try refreshing/restarting the application
-- If PipeWire crashes, check the loopback configuration syntax
-- The sliders control the loopback stream volumes, not the virtual sink volumes directly
+Check daemon status:
+```bash
+systemctl --user status pipewire-volume-mixer-daemon
+```
+
+View daemon logs:
+```bash
+journalctl --user -u pipewire-volume-mixer-daemon -f
+```
+
+## Development
+
+### Running Tests
+```bash
+make test
+```
+
+### Code Quality Checks
+```bash
+make code-quality
+```
+
+### Building
+```bash
+make daemon-build  # Build daemon
+npm run build      # Build extension
+```
 
 ## License
 
-GPL-3.0 (same as GNOME Shell)
-
-## Author
-
-Created by Dave with assistance from Claude
+GPL-3.0

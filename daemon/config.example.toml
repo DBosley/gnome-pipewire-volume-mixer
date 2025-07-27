@@ -1,0 +1,30 @@
+# PipeWire Volume Mixer Daemon Configuration
+
+# Virtual sinks configuration
+# Each virtual sink will be created in PipeWire and appear in the extension
+[[virtual_sinks]]
+name = "Game"
+description = "Virtual sink for game audio"
+
+[[virtual_sinks]]
+name = "Media" 
+description = "Virtual sink for media playback"
+
+[[virtual_sinks]]
+name = "Chat"
+description = "Virtual sink for voice chat"
+
+# Routing configuration
+[routing]
+# Enable automatic routing of new applications
+enable_auto_routing = false
+
+# Default sink for new applications (if auto_routing is enabled)
+default_sink = "Game"
+
+# Per-application routing rules
+# Example:
+# [routing.rules]
+# firefox = "Media"
+# discord = "Chat"
+# steam = "Game"

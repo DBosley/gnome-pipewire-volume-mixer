@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  code-quality:
+    name: Code Quality Check
+    uses: ./.github/workflows/code-quality.yml
+
+  build:
+    name: Build
+    needs: [code-quality]
+    uses: ./.github/workflows/build.yml
+
+  create-release:
+    name: Create Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Determine version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION="${{ github.ref_name }}"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+    
+    - name: Download release bundle
+      uses: actions/download-artifact@v4
+      with:
+        name: release-bundle
+        path: dist
+    
+    - name: Create changelog
+      run: |
+        cat > CHANGELOG.md << EOF
+        # Release ${{ steps.version.outputs.version }}
+        
+        ## Installation
+        
+        1. Download the release package for your system
+        2. Extract the archive: \`tar -xzf gnome-pipewire-volume-mixer-linux-x64.tar.gz\`
+        3. Run the installer: \`cd gnome-pipewire-volume-mixer && ./install.sh\`
+        
+        ## Requirements
+        
+        - GNOME 40 or higher
+        - PipeWire audio system
+        - WirePlumber
+        
+        ## What's New
+        
+        See [commit history](https://github.com/${{ github.repository }}/commits/${{ steps.version.outputs.version }}) for changes.
+        EOF
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: ${{ steps.version.outputs.version }}
+        body_path: CHANGELOG.md
+        draft: false
+        prerelease: false
+        files: |
+          dist/gnome-pipewire-volume-mixer-linux-x64.tar.gz

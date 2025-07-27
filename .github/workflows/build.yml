@@ -1,0 +1,125 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-daemon:
+    name: Build Daemon
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: pipewire-volume-mixer-daemon
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Rust
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: stable
+        target: ${{ matrix.target }}
+    
+    - name: Install dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libpipewire-0.3-dev libspa-0.2-dev pkg-config
+    
+    - name: Build daemon
+      run: |
+        cd daemon
+        cargo build --release --target ${{ matrix.target }}
+        cp target/${{ matrix.target }}/release/${{ matrix.artifact }} .
+    
+    - name: Upload daemon artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: daemon-${{ matrix.target }}
+        path: daemon/${{ matrix.artifact }}
+
+  build-extension:
+    name: Build Extension
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Create extension package
+      run: |
+        mkdir -p build/extension
+        cp src/*.js build/extension/
+        cp src/metadata.json build/extension/
+        cp src/stylesheet.css build/extension/
+    
+    - name: Upload extension artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: extension
+        path: build/extension/
+
+  create-bundle:
+    name: Create Release Bundle
+    needs: [build-daemon, build-extension]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Create release structure
+      run: |
+        mkdir -p release/gnome-pipewire-volume-mixer
+        
+        # Copy daemon
+        mkdir -p release/gnome-pipewire-volume-mixer/daemon
+        cp artifacts/daemon-x86_64-unknown-linux-gnu/* release/gnome-pipewire-volume-mixer/daemon/
+        cp daemon/config.example.toml release/gnome-pipewire-volume-mixer/daemon/
+        cp daemon/pipewire-volume-mixer-daemon.service release/gnome-pipewire-volume-mixer/daemon/
+        
+        # Copy extension
+        mkdir -p release/gnome-pipewire-volume-mixer/src
+        cp -r artifacts/extension/* release/gnome-pipewire-volume-mixer/src/
+        
+        # Copy install script and docs
+        cp install.sh release/gnome-pipewire-volume-mixer/
+        cp README.md release/gnome-pipewire-volume-mixer/ || echo "No README.md found"
+        cp LICENSE release/gnome-pipewire-volume-mixer/ || echo "No LICENSE found"
+        
+        # Make install script executable
+        chmod +x release/gnome-pipewire-volume-mixer/install.sh
+        
+        # Create archive
+        cd release
+        tar -czf gnome-pipewire-volume-mixer-linux-x64.tar.gz gnome-pipewire-volume-mixer
+    
+    - name: Upload release bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-bundle
+        path: release/gnome-pipewire-volume-mixer-linux-x64.tar.gz
+        retention-days: 30
