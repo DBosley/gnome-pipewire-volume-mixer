@@ -2,6 +2,8 @@
 
 A GNOME Shell extension that adds virtual audio sinks to PipeWire, allowing you to control volumes for different types of applications separately (like games, media, and voice chat).
 
+> ⚠️ **DISCLAIMER**: This extension is VERY MUCH SO VIBE CODED by someone who's not a GNOME or Rust expert. It works on my machine™ but any usage is at your own risk. Contributions and improvements are welcome!
+
 ## Features
 
 - **Virtual Audio Sinks**: Create separate volume controls for different application categories
