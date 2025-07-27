@@ -22,7 +22,7 @@ enum CacheUpdate {
     UpdateSink(String, SinkInfo),
     MarkAppInactive(String, u32),
     AddSinkInputToApp(String, u32, String), // app_display_name, sink_input_id, current_sink
-    CheckRoutingRule(String, u32), // app_name, sink_input_id
+    CheckRoutingRule(String, u32),          // app_name, sink_input_id
 }
 
 struct MonitorState {
@@ -112,7 +112,7 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                         if let Some(target_sink) = cache.routing_rules.get(&app_name) {
                             let target_sink_name = target_sink.clone();
                             info!("Applying routing rule: {} -> {}", app_name, target_sink_name);
-                            
+
                             // Move the sink input to the target sink
                             std::thread::spawn(move || {
                                 // Find the sink ID for the target
@@ -127,9 +127,19 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                                             if let Ok(sink_id) = parts[0].parse::<u32>() {
                                                 // Move the sink input
                                                 let _ = std::process::Command::new("pactl")
-                                                    .args(["move-sink-input", &sink_input_id.to_string(), &sink_id.to_string()])
+                                                    .args([
+                                                        "move-sink-input",
+                                                        &sink_input_id.to_string(),
+                                                        &sink_id.to_string(),
+                                                    ])
                                                     .output();
-                                                info!("Routed {} (input #{}) to {} (sink #{})", app_name, sink_input_id, target_sink_name, sink_id);
+                                                info!(
+                                                    "Routed {} (input #{}) to {} (sink #{})",
+                                                    app_name,
+                                                    sink_input_id,
+                                                    target_sink_name,
+                                                    sink_id
+                                                );
                                                 break;
                                             }
                                         }
@@ -215,12 +225,12 @@ fn handle_global(
             let _ = state.cache_tx.send(CacheUpdate::UpdateSink(node_name.to_string(), sink_info));
 
             info!("Found virtual sink: {} (id: {})", node_name, id);
-            
+
             // Get actual volume asynchronously
             let sink_id = id;
             let sink_name = node_name.to_string();
             let cache_tx = state.cache_tx.clone();
-            
+
             std::thread::spawn(move || {
                 // Get actual volume using wpctl
                 if let Ok(output) = std::process::Command::new("wpctl")
@@ -240,7 +250,8 @@ fn handle_global(
                                     volume,
                                     muted,
                                 };
-                                let _ = cache_tx.send(CacheUpdate::UpdateSink(sink_name, sink_info));
+                                let _ =
+                                    cache_tx.send(CacheUpdate::UpdateSink(sink_name, sink_info));
                             }
                         }
                     }
@@ -255,7 +266,7 @@ fn handle_global(
         if node_name.contains("_to_") || node_name.ends_with("_Loopback") {
             return;
         }
-        
+
         // Also check media.name for loopback patterns
         if let Some(media_name) = props.get("media.name") {
             if media_name.contains("Loopback") {
@@ -282,32 +293,28 @@ fn handle_global(
         // Binary name extraction will happen in the async thread with pactl
 
         // We'll determine the final name later after checking pactl
-        let node_info = NodeInfo {
-            app_name: Some(app_name.clone()),
-        };
+        let node_info = NodeInfo { app_name: Some(app_name.clone()) };
 
         state.nodes.insert(id, node_info);
 
         // Auto-routing will be handled after we know the binary name
 
         // Get object.serial for pactl lookup
-        let serial_id = props.get("object.serial")
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(id);
-        
+        let serial_id =
+            props.get("object.serial").and_then(|s| s.parse::<u32>().ok()).unwrap_or(id);
+
         // Get sink connection info asynchronously
         let app_id = serial_id;
         let app_name_for_log = app_name.clone();
         let cache_tx = state.cache_tx.clone();
-        
+
         std::thread::spawn(move || {
             debug!("Looking up sink for app {} with ID {}", app_name_for_log, app_id);
-            
+
             // Also try to get the binary name from pactl (more complete than PipeWire properties)
             let mut extracted_binary_name = None;
-            if let Ok(pactl_output) = std::process::Command::new("pactl")
-                .args(["list", "sink-inputs"])
-                .output()
+            if let Ok(pactl_output) =
+                std::process::Command::new("pactl").args(["list", "sink-inputs"]).output()
             {
                 if pactl_output.status.success() {
                     let stdout = String::from_utf8_lossy(&pactl_output.stdout);
@@ -316,10 +323,13 @@ fn handle_global(
                         // Look for application.process.binary in the next several lines
                         let lines = stdout[pos..].lines().take(30);
                         for line in lines {
-                            if let Some(binary_line) = line.trim().strip_prefix("application.process.binary = \"") {
+                            if let Some(binary_line) =
+                                line.trim().strip_prefix("application.process.binary = \"")
+                            {
                                 if let Some(binary_end) = binary_line.find('"') {
                                     let binary_path = &binary_line[..binary_end];
-                                    let extracted = binary_path.split('/')
+                                    let extracted = binary_path
+                                        .split('/')
                                         .next_back()
                                         .unwrap_or(binary_path)
                                         .trim_end_matches("-bin")
@@ -335,15 +345,14 @@ fn handle_global(
                     }
                 }
             }
-            
+
             // Get sink info using pactl
-            if let Ok(output) = std::process::Command::new("pactl")
-                .args(["list", "sink-inputs"])
-                .output()
+            if let Ok(output) =
+                std::process::Command::new("pactl").args(["list", "sink-inputs"]).output()
             {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    
+
                     // Find our sink input by ID
                     let search_pattern = format!("Sink Input #{app_id}");
                     if let Some(pos) = stdout.find(&search_pattern) {
@@ -357,14 +366,20 @@ fn handle_global(
                                         .args(["list", "sinks"])
                                         .output()
                                     {
-                                        let sink_stdout = String::from_utf8_lossy(&sink_output.stdout);
+                                        let sink_stdout =
+                                            String::from_utf8_lossy(&sink_output.stdout);
                                         let sink_search = format!("Sink #{sink_id}");
                                         if let Some(sink_pos) = sink_stdout.find(&sink_search) {
                                             // Find the Name: line
                                             for line in sink_stdout[sink_pos..].lines().take(10) {
-                                                if let Some(name) = line.trim().strip_prefix("Name:") {
+                                                if let Some(name) =
+                                                    line.trim().strip_prefix("Name:")
+                                                {
                                                     let sink_name = name.trim().to_string();
-                                                    info!("Found app {} connected to sink {}", app_name_for_log, sink_name);
+                                                    info!(
+                                                        "Found app {} connected to sink {}",
+                                                        app_name_for_log, sink_name
+                                                    );
                                                     // Use extracted binary name if available, otherwise fall back
                                                     let final_display_name = extracted_binary_name
                                                         .as_ref()
@@ -373,19 +388,36 @@ fn handle_global(
                                                             let mut chars = name.chars();
                                                             match chars.next() {
                                                                 None => String::new(),
-                                                                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                                                                Some(first) => {
+                                                                    first
+                                                                        .to_uppercase()
+                                                                        .collect::<String>()
+                                                                        + chars.as_str()
+                                                                }
                                                             }
                                                         })
-                                                        .unwrap_or_else(|| app_name_for_log.clone());
-                                                    
+                                                        .unwrap_or_else(|| {
+                                                            app_name_for_log.clone()
+                                                        });
+
                                                     // Use the capitalized display name as the key for consistency
                                                     let final_key = final_display_name.clone();
-                                                    
+
                                                     // Always use AddSinkInputToApp - it will create the app if needed
-                                                    let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(final_key.clone(), app_id, sink_name));
-                                                    
+                                                    let _ = cache_tx.send(
+                                                        CacheUpdate::AddSinkInputToApp(
+                                                            final_key.clone(),
+                                                            app_id,
+                                                            sink_name,
+                                                        ),
+                                                    );
+
                                                     // Check if we need to apply a routing rule
-                                                    let _ = cache_tx.send(CacheUpdate::CheckRoutingRule(final_key, app_id));
+                                                    let _ = cache_tx.send(
+                                                        CacheUpdate::CheckRoutingRule(
+                                                            final_key, app_id,
+                                                        ),
+                                                    );
                                                     return;
                                                 }
                                             }
@@ -397,7 +429,7 @@ fn handle_global(
                     }
                 }
             }
-            
+
             // Fallback if we couldn't get sink info
             let final_display_name = extracted_binary_name
                 .as_ref()
@@ -410,13 +442,17 @@ fn handle_global(
                     }
                 })
                 .unwrap_or_else(|| app_name_for_log.clone());
-            
+
             // Use the capitalized display name as the key for consistency
             let final_key = final_display_name.clone();
-            
+
             // Always use AddSinkInputToApp - it will create the app if needed
-            let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(final_key.clone(), app_id, "Unknown".to_string()));
-            
+            let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(
+                final_key.clone(),
+                app_id,
+                "Unknown".to_string(),
+            ));
+
             // Check if we need to apply a routing rule
             let _ = cache_tx.send(CacheUpdate::CheckRoutingRule(final_key, app_id));
         });

@@ -133,6 +133,9 @@ extension-lint:
 
 daemon-lint:
 	@echo "Running daemon linter..."
+	@echo "  Checking formatting..."
+	@cd daemon && cargo fmt -- --check
+	@echo "  Running clippy..."
 	@cd daemon && cargo clippy -- -D warnings
 
 # Comprehensive code quality check

@@ -69,7 +69,6 @@ impl AudioCache {
         self.increment_generation();
     }
 
-
     pub fn get_snapshot(&self) -> CacheSnapshot {
         CacheSnapshot {
             generation: self.get_generation(),
@@ -85,4 +84,3 @@ pub struct CacheSnapshot {
     pub sinks: HashMap<String, SinkInfo>,
     pub apps: HashMap<String, AppInfo>,
 }
-
