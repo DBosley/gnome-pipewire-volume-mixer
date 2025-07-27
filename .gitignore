@@ -11,7 +11,11 @@ dist/
 
 # Rust
 **/*.rs.bk
-Cargo.lock
+# Don't ignore Cargo.lock for binary projects
+# Cargo.lock
+
+# Daemon binary
+daemon/pipewire-volume-mixer-daemon
 
 # IDE
 .vscode/
