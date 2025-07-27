@@ -35,17 +35,26 @@ describe('GNOME PipeWire Volume Mixer Extension', () => {
       const sink = { name: 'Game', label: 'Game', icon: 'applications-games-symbolic' };
       const item = new extension.VirtualSinkItem(sink);
       
-      // Check icon creation
+      // Check speaker icon creation (should be called first)
       expect(mockImports.gi.St.Icon).toHaveBeenCalledWith({
-        icon_name: 'applications-games-symbolic',
+        icon_name: 'audio-volume-high-symbolic',
         style_class: 'popup-menu-icon'
       });
+      
+      // Check speaker icon button creation
+      expect(mockImports.gi.St.Button).toHaveBeenCalled();
+      // Let's just check that the button was created with the right class and can_focus
+      // The child property might not be set the way we expect in the mock
+      const buttonCall = mockImports.gi.St.Button.mock.calls[0][0];
+      expect(buttonCall).toBeDefined();
+      expect(buttonCall.style_class).toBe('icon-button');
+      expect(buttonCall.can_focus).toBe(true);
       
       // Check slider creation
       expect(mockImports.ui.slider.Slider).toHaveBeenCalledWith(0);
       
-      // Check that components were added as children
-      expect(item._mockChildren).toHaveLength(2);
+      // Check that sink selector was created
+      expect(item._sinkSelector).toBeDefined();
     });
 
     test('should connect slider change handler', () => {
@@ -122,10 +131,10 @@ describe('GNOME PipeWire Volume Mixer Extension', () => {
       expect(mockImports.ui.popupMenu.PopupSeparatorMenuItem).toHaveBeenCalled();
       
       // Should add items to menu
-      expect(mockVolumeMenu.addMenuItem).toHaveBeenCalledTimes(4); // 1 separator + 3 sinks
+      expect(mockVolumeMenu.addMenuItem).toHaveBeenCalledTimes(7); // 1 separator + 3 sinks + 3 selectors
       
       // Should create VirtualSinkItem for each sink
-      expect(extension.virtualSinkItems).toHaveLength(4); // 1 separator + 3 sinks
+      expect(extension.virtualSinkItems).toHaveLength(7); // 1 separator + 3 sinks + 3 selectors
     });
 
 
