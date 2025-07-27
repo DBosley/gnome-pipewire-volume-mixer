@@ -1,8 +1,0 @@
-{
-  "name": "Virtual Audio Sinks",
-  "description": "Show Game, Chat, and Media virtual sinks in volume menu",
-  "uuid": "virtual-audio-sinks@dave",
-  "shell-version": ["42"],
-  "version": 1,
-  "url": "https://github.com/DBosley/gnome-pipewire-volume-mixer"
-}

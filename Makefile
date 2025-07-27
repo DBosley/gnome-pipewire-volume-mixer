@@ -1,8 +1,9 @@
 # Makefile for GNOME PipeWire Volume Mixer Extension
 
-EXTENSION_UUID = virtual-audio-sinks@dave
+EXTENSION_UUID = pipewire-volume-mixer@extensions.gnome
 EXTENSION_DIR = $(HOME)/.local/share/gnome-shell/extensions/$(EXTENSION_UUID)
-FILES = extension.js metadata.json stylesheet.css
+SRC_DIR = src
+FILES = $(SRC_DIR)/extension.js $(SRC_DIR)/metadata.json $(SRC_DIR)/stylesheet.css $(SRC_DIR)/prefs.js
 
 .PHONY: all install uninstall enable disable restart package clean
 
@@ -33,7 +34,8 @@ restart:
 
 package:
 	@echo "Creating extension package..."
-	@zip -r $(EXTENSION_UUID).zip $(FILES) LICENSE README.md
+	@cd $(SRC_DIR) && zip -r ../$(EXTENSION_UUID).zip extension.js metadata.json stylesheet.css prefs.js
+	@zip -r $(EXTENSION_UUID).zip LICENSE README.md
 	@echo "Package created: $(EXTENSION_UUID).zip"
 
 clean:

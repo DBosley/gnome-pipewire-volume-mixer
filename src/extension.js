@@ -24,14 +24,6 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
         });
         this.add_child(this._icon);
         
-        this._label = new St.Label({
-            text: sink.label,
-            y_expand: true,
-            y_align: Clutter.ActorAlign.CENTER
-        });
-        this.add_child(this._label);
-        this.label_actor = this._label;
-        
         this._slider = new Slider.Slider(0);
         this._sliderChangedId = this._slider.connect('notify::value', this._sliderChanged.bind(this));
         this._slider.accessible_name = sink.label;
@@ -191,4 +183,16 @@ function disable() {
         item.destroy();
     });
     virtualSinkItems = [];
+}
+
+// Export for testing
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        VIRTUAL_SINKS,
+        VirtualSinkItem,
+        enable,
+        disable,
+        volumeMenu,
+        virtualSinkItems
+    };
 }
