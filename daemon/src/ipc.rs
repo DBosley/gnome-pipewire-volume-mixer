@@ -312,8 +312,10 @@ async fn route_app_to_sink(app_name: &str, sink_name: &str) -> Result<()> {
         }
     }
 
+    // If no active streams found, this is an inactive app - just update the routing rule
     if sink_input_ids.is_empty() {
-        bail!("Could not find any sink inputs for app: {}", app_name);
+        info!("No active streams found for {}. Routing rule will apply when app starts playing.", app_name);
+        return Ok(());
     }
 
     // Now find the sink ID for the target sink

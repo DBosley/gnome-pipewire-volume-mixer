@@ -22,6 +22,7 @@ enum CacheUpdate {
     UpdateSink(String, SinkInfo),
     MarkAppInactive(String, u32),
     AddSinkInputToApp(String, u32, String), // app_display_name, sink_input_id, current_sink
+    CheckRoutingRule(String, u32), // app_name, sink_input_id
 }
 
 struct MonitorState {
@@ -105,6 +106,37 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                             cache.update_app(app_name, app_info);
                         }
                         cache.increment_generation();
+                    }
+                    CacheUpdate::CheckRoutingRule(app_name, sink_input_id) => {
+                        // Check if we have a routing rule for this app
+                        if let Some(target_sink) = cache.routing_rules.get(&app_name) {
+                            let target_sink_name = target_sink.clone();
+                            info!("Applying routing rule: {} -> {}", app_name, target_sink_name);
+                            
+                            // Move the sink input to the target sink
+                            std::thread::spawn(move || {
+                                // Find the sink ID for the target
+                                if let Ok(output) = std::process::Command::new("pactl")
+                                    .args(["list", "sinks", "short"])
+                                    .output()
+                                {
+                                    let stdout = String::from_utf8_lossy(&output.stdout);
+                                    for line in stdout.lines() {
+                                        let parts: Vec<&str> = line.split_whitespace().collect();
+                                        if parts.len() >= 2 && parts[1] == target_sink_name {
+                                            if let Ok(sink_id) = parts[0].parse::<u32>() {
+                                                // Move the sink input
+                                                let _ = std::process::Command::new("pactl")
+                                                    .args(["move-sink-input", &sink_input_id.to_string(), &sink_id.to_string()])
+                                                    .output();
+                                                info!("Routed {} (input #{}) to {} (sink #{})", app_name, sink_input_id, target_sink_name, sink_id);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -350,7 +382,10 @@ fn handle_global(
                                                     let final_key = final_display_name.clone();
                                                     
                                                     // Always use AddSinkInputToApp - it will create the app if needed
-                                                    let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(final_key, app_id, sink_name));
+                                                    let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(final_key.clone(), app_id, sink_name));
+                                                    
+                                                    // Check if we need to apply a routing rule
+                                                    let _ = cache_tx.send(CacheUpdate::CheckRoutingRule(final_key, app_id));
                                                     return;
                                                 }
                                             }
@@ -380,7 +415,10 @@ fn handle_global(
             let final_key = final_display_name.clone();
             
             // Always use AddSinkInputToApp - it will create the app if needed
-            let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(final_key, app_id, "Unknown".to_string()));
+            let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(final_key.clone(), app_id, "Unknown".to_string()));
+            
+            // Check if we need to apply a routing rule
+            let _ = cache_tx.send(CacheUpdate::CheckRoutingRule(final_key, app_id));
         });
     }
 }

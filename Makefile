@@ -6,7 +6,7 @@ SRC_DIR = src
 FILES = $(SRC_DIR)/extension.js $(SRC_DIR)/metadata.json $(SRC_DIR)/stylesheet.css $(SRC_DIR)/prefs.js \
         $(SRC_DIR)/daemonBackend.js $(SRC_DIR)/sharedMemory.js $(SRC_DIR)/ipcClient.js
 
-.PHONY: all install uninstall enable disable restart reload package clean daemon-build daemon-install daemon-start daemon-stop daemon-status daemon-restart daemon-reload daemon-logs daemon-logs-recent daemon-check reinstall
+.PHONY: all install uninstall enable disable restart reload package clean daemon-build daemon-install daemon-start daemon-stop daemon-status daemon-restart daemon-reload daemon-logs daemon-logs-recent daemon-check reinstall test lint code-quality extension-test extension-lint daemon-test daemon-lint
 
 all: install enable restart
 
@@ -110,3 +110,38 @@ debug-shm:
 debug-apps:
 	@echo "Current audio applications:"
 	@pactl list sink-inputs | grep -E "(Sink Input|Sink:|application.name)" | head -30
+
+# Testing targets
+test: extension-test daemon-test
+	@echo "All tests passed!"
+
+extension-test:
+	@echo "Running extension tests..."
+	@npm test
+
+daemon-test:
+	@echo "Running daemon tests..."
+	@cd daemon && cargo test
+
+# Linting targets
+lint: extension-lint daemon-lint
+	@echo "All linting checks passed!"
+
+extension-lint:
+	@echo "Running extension linter..."
+	@npm run lint
+
+daemon-lint:
+	@echo "Running daemon linter..."
+	@cd daemon && cargo clippy -- -D warnings
+
+# Comprehensive code quality check
+code-quality: lint test
+	@echo "====================================="
+	@echo "Code Quality Check Complete!"
+	@echo "====================================="
+	@echo "✓ Extension linting passed"
+	@echo "✓ Daemon linting passed"
+	@echo "✓ Extension tests passed"
+	@echo "✓ Daemon tests passed"
+	@echo "====================================="
