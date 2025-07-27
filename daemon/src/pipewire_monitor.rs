@@ -198,9 +198,16 @@ fn handle_global(
 
     // Check if this is an audio stream
     if media_class == "Stream/Output/Audio" || media_class == "Stream/Input/Audio" {
-        // Skip loopback streams
-        if node_name.contains("_to_") {
+        // Skip loopback streams (check multiple properties)
+        if node_name.contains("_to_") || node_name.ends_with("_Loopback") {
             return;
+        }
+        
+        // Also check media.name for loopback patterns
+        if let Some(media_name) = props.get("media.name") {
+            if media_name.contains("Loopback") {
+                return;
+            }
         }
 
         let app_name = props
