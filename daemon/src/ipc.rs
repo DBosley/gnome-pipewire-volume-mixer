@@ -249,10 +249,7 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
             Ok(format!("Set {sink_name} muted to {muted}"))
         }
 
-        "RELOAD_CONFIG" => {
-            // TODO: Implement config reload
-            Ok("Config reloaded".to_string())
-        }
+        "RELOAD_CONFIG" => Ok("Config reload not implemented".to_string()),
 
         _ => {
             bail!("Unknown command: {}", parts[0]);

@@ -83,9 +83,6 @@ async fn main() -> Result<()> {
                     .map(|entry| entry.key().clone())
                     .collect();
                 let count = inactive_apps.len();
-                if count > 0 {
-                    debug!("Found {} inactive apps: {:?}", count, inactive_apps);
-                }
                 (count > 0, count)
             };
 

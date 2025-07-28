@@ -6,7 +6,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{mpsc, Arc};
-use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
@@ -29,8 +28,6 @@ struct MonitorState {
     cache_tx: mpsc::Sender<CacheUpdate>,
     config: Config,
     nodes: HashMap<u32, NodeInfo>,
-    last_event: Instant,
-    event_count: u64,
 }
 
 struct NodeInfo {
@@ -169,13 +166,7 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
         });
     });
 
-    let state = Rc::new(RefCell::new(MonitorState {
-        cache_tx,
-        config,
-        nodes: HashMap::new(),
-        last_event: Instant::now(),
-        event_count: 0,
-    }));
+    let state = Rc::new(RefCell::new(MonitorState { cache_tx, config, nodes: HashMap::new() }));
 
     // Listen for global objects
     let _listener = registry
@@ -207,16 +198,6 @@ fn handle_global(
     object_type: ObjectType,
 ) {
     let mut state = state.borrow_mut();
-
-    // Track event rate
-    state.event_count += 1;
-    let now = Instant::now();
-    if now.duration_since(state.last_event) > Duration::from_secs(10) {
-        let rate = state.event_count as f64 / 10.0;
-        debug!("PipeWire event rate: {:.1} events/sec", rate);
-        state.event_count = 0;
-        state.last_event = now;
-    }
 
     // We're interested in nodes (audio streams and sinks)
     if object_type != ObjectType::Node {
@@ -295,16 +276,6 @@ fn handle_global(
             .or_else(|| props.get("node.description"))
             .unwrap_or_default()
             .to_string();
-
-        // Debug: Log all application.* properties
-        if !app_name.is_empty() {
-            debug!("App properties for {}:", app_name);
-            for (key, value) in props.iter() {
-                if key.starts_with("application.") {
-                    debug!("  {}: {}", key, value);
-                }
-            }
-        }
 
         // Binary name extraction will happen in the async thread with pactl
 
