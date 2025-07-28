@@ -205,8 +205,12 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
         // Update backend
         backend.setMute(this._sink.name, this._muted).catch(e => {
             log(`Virtual Audio Sinks: Error setting mute: ${e}`);
+            // Revert mute state on error
+            this._muted = !this._muted;
+            this._updateSpeakerIcon(this._muted ? 0 : this._slider.value);
         });
         
+        // Update icon immediately for responsiveness
         this._updateSpeakerIcon(this._muted ? 0 : this._slider.value);
     }
     

@@ -133,14 +133,21 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
 
             // Update cache and get sink ID
             let cache_write = cache.write().await;
-            let sink_id = match cache_write.sinks.get_mut(sink_name) {
+            let (sink_id, was_muted) = match cache_write.sinks.get_mut(sink_name) {
                 Some(mut sink) => {
                     let id = sink.id;
+                    let was_muted = sink.muted;
                     sink.volume = volume;
-                    id
+                    // If volume > 0, unmute
+                    if volume > 0.0 && sink.muted {
+                        sink.muted = false;
+                    }
+                    (id, was_muted)
                 }
                 None => bail!("Unknown sink: {}", sink_name),
             };
+            // Increment generation so UI updates
+            cache_write.increment_generation();
             drop(cache_write);
 
             // Actually set volume in PipeWire
@@ -153,6 +160,14 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
 
             if !output.status.success() {
                 bail!("Failed to set sink volume: {}", String::from_utf8_lossy(&output.stderr));
+            }
+
+            // If we unmuted due to volume change, also unmute the sink
+            if was_muted && volume > 0.0 {
+                let _ = tokio::process::Command::new("wpctl")
+                    .args(["set-mute", &sink_id.to_string(), "0"])
+                    .output()
+                    .await;
             }
 
             // Then find and set the loopback sink-input volume
@@ -179,6 +194,14 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
                                 ])
                                 .output()
                                 .await;
+
+                            // If we unmuted due to volume change, also unmute the loopback
+                            if was_muted && volume > 0.0 {
+                                let _ = tokio::process::Command::new("pactl")
+                                    .args(["set-sink-input-mute", &id_match.to_string(), "0"])
+                                    .output()
+                                    .await;
+                            }
                             break;
                         }
                     }
@@ -206,6 +229,8 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
                 }
                 None => bail!("Unknown sink: {}", sink_name),
             };
+            // Increment generation so UI updates
+            cache_write.increment_generation();
             drop(cache_write);
 
             // Actually set mute in PipeWire
@@ -245,6 +270,7 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
                     }
                 }
             }
+
 
             Ok(format!("Set {sink_name} muted to {muted}"))
         }
