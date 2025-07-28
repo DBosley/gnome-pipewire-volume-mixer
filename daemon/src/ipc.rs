@@ -271,7 +271,6 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
                 }
             }
 
-
             Ok(format!("Set {sink_name} muted to {muted}"))
         }
 
