@@ -79,7 +79,8 @@ export default [
       '*.min.js',
       'coverage/',
       '.git/',
-      'docs/**/*'
+      'docs/**/*',
+      'debug-cache.js'
     ]
   }
 ];

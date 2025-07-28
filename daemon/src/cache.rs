@@ -18,6 +18,9 @@ pub struct AppInfo {
     pub current_sink: String,
     pub active: bool,
     pub sink_input_ids: Vec<u32>,
+    #[serde(skip)]
+    #[allow(dead_code)] // Used for TTL tracking but not directly read
+    pub inactive_since: Option<std::time::Instant>,
 }
 
 #[derive(Debug)]
@@ -75,6 +78,44 @@ impl AudioCache {
             sinks: self.sinks.iter().map(|r| (r.key().clone(), r.value().clone())).collect(),
             apps: self.apps.iter().map(|r| (r.key().clone(), r.value().clone())).collect(),
         }
+    }
+
+    #[allow(dead_code)] // Used by cleanup task in main.rs
+    pub fn cleanup_inactive_apps(&self, ttl_seconds: u64) -> usize {
+        let now = std::time::Instant::now();
+        let ttl = std::time::Duration::from_secs(ttl_seconds);
+        let mut removed_count = 0;
+
+        // Use retain to remove items in-place (more efficient than collect + remove)
+        self.apps.retain(|name, app| {
+            // Keep active apps
+            if app.active {
+                return true;
+            }
+
+            // Keep apps with routing rules
+            if self.routing_rules.contains_key(name) {
+                return true;
+            }
+
+            // Check if inactive app has expired
+            if let Some(inactive_since) = app.inactive_since {
+                if now.duration_since(inactive_since) > ttl {
+                    // Remove from remembered apps too
+                    self.remembered_apps.remove(name);
+                    removed_count += 1;
+                    return false; // Remove this app
+                }
+            }
+
+            true // Keep this app
+        });
+
+        if removed_count > 0 {
+            self.increment_generation();
+        }
+
+        removed_count
     }
 }
 

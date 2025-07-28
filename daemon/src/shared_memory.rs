@@ -46,8 +46,12 @@ impl SharedMemoryWriter {
     }
 
     pub async fn run(mut self) {
-        let mut interval = time::interval(Duration::from_millis(100));
+        // Use adaptive update rate: fast when active, slow when idle
+        let fast_interval = Duration::from_millis(50);
+        let slow_interval = Duration::from_millis(200);
+        let mut interval = time::interval(fast_interval);
         let mut last_generation = 0u64;
+        let mut idle_cycles = 0;
 
         loop {
             interval.tick().await;
@@ -70,6 +74,21 @@ impl SharedMemoryWriter {
                 } else {
                     last_generation = current_generation;
                     debug!("Updated shared memory cache (generation {})", current_generation);
+
+                    // Reset to fast interval when activity detected
+                    if idle_cycles > 0 {
+                        interval = time::interval(fast_interval);
+                        idle_cycles = 0;
+                    }
+                }
+            } else {
+                // No changes, increment idle counter
+                idle_cycles += 1;
+
+                // After 10 idle cycles (~500ms), switch to slow interval
+                if idle_cycles == 10 {
+                    interval = time::interval(slow_interval);
+                    debug!("Switching to slow update interval");
                 }
             }
         }

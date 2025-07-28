@@ -29,6 +29,7 @@ fn test_app_operations() {
         current_sink: "Media".to_string(),
         active: true,
         sink_input_ids: vec![123, 456],
+        inactive_since: None,
     };
 
     cache.update_app("Firefox".to_string(), app.clone());

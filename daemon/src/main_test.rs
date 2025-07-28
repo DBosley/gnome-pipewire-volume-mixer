@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
                 current_sink: "Media".to_string(),
                 active: true,
                 sink_input_ids: vec![200],
+                inactive_since: None,
             },
         );
 
@@ -67,6 +68,7 @@ async fn main() -> Result<()> {
                 current_sink: "Chat".to_string(),
                 active: false,
                 sink_input_ids: vec![],
+                inactive_since: Some(std::time::Instant::now()),
             },
         );
     }

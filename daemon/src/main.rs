@@ -65,6 +65,43 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Start cleanup task for inactive apps
+    let cache_cleanup = cache.clone();
+    let cleanup_handle = tokio::spawn(async move {
+        // Check less frequently - every 15 seconds is plenty
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
+        loop {
+            interval.tick().await;
+
+            // First do a quick check if there are any inactive apps at all
+            let (has_inactive, inactive_count) = {
+                let cache = cache_cleanup.read().await;
+                let inactive_apps: Vec<_> = cache
+                    .apps
+                    .iter()
+                    .filter(|entry| !entry.value().active)
+                    .map(|entry| entry.key().clone())
+                    .collect();
+                let count = inactive_apps.len();
+                if count > 0 {
+                    debug!("Found {} inactive apps: {:?}", count, inactive_apps);
+                }
+                (count > 0, count)
+            };
+
+            // Only run cleanup if there are inactive apps
+            if has_inactive {
+                debug!("Running cleanup for {} inactive apps", inactive_count);
+                let removed = cache_cleanup.read().await.cleanup_inactive_apps(300); // 5 minutes
+                if removed > 0 {
+                    info!("Cleaned up {} inactive apps after 5 minute TTL", removed);
+                } else {
+                    debug!("No apps exceeded TTL yet");
+                }
+            }
+        }
+    });
+
     // Initialize PipeWire monitor
     let pw_monitor = PipeWireMonitor::new(cache.clone(), config)?;
 
@@ -73,7 +110,7 @@ async fn main() -> Result<()> {
     pw_monitor.run().await?;
 
     // Wait for tasks to complete (they shouldn't unless there's an error)
-    tokio::try_join!(shm_handle, ipc_handle)?;
+    tokio::try_join!(shm_handle, ipc_handle, cleanup_handle)?;
 
     Ok(())
 }

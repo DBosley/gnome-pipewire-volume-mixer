@@ -104,8 +104,7 @@ dev-reload: daemon-restart reinstall
 
 # Debug helpers
 debug-shm:
-	@echo "Shared memory contents:"
-	@xxd /dev/shm/pipewire-volume-mixer-$$UID 2>/dev/null | head -20 || echo "No shared memory file found!"
+	@python3 scripts/debug-shm.py
 
 debug-apps:
 	@echo "Current audio applications:"

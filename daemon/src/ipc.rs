@@ -100,6 +100,17 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
                         app.current_sink = sink_name.to_string();
                         // Use the proper update method to increment generation
                         cache.write().await.update_app(app_name.to_string(), app);
+                    } else {
+                        // App doesn't exist yet, create it as inactive
+                        let app_info = crate::cache::AppInfo {
+                            display_name: app_name.to_string(),
+                            binary_name: app_name.to_lowercase(),
+                            current_sink: sink_name.to_string(),
+                            active: false,
+                            sink_input_ids: vec![],
+                            inactive_since: Some(std::time::Instant::now()),
+                        };
+                        cache.write().await.update_app(app_name.to_string(), app_info);
                     }
 
                     Ok(format!("Routed {app_name} to {sink_name}"))

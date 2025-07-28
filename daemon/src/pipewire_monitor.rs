@@ -20,7 +20,7 @@ pub struct PipeWireMonitor {
 
 enum CacheUpdate {
     UpdateSink(String, SinkInfo),
-    MarkAppInactive(String, u32),
+    MarkAppInactive(u32),                   // sink_input_id
     AddSinkInputToApp(String, u32, String), // app_display_name, sink_input_id, current_sink
     CheckRoutingRule(String, u32),          // app_name, sink_input_id
 }
@@ -35,6 +35,7 @@ struct MonitorState {
 
 struct NodeInfo {
     app_name: Option<String>,
+    serial_id: u32, // object.serial used as sink_input_id
 }
 
 impl PipeWireMonitor {
@@ -79,10 +80,20 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                 let cache = cache_clone.write().await;
                 match update {
                     CacheUpdate::UpdateSink(name, info) => cache.update_sink(name, info),
-                    CacheUpdate::MarkAppInactive(app_name, id) => {
-                        if let Some(mut app) = cache.apps.get_mut(&app_name) {
-                            app.active = false;
-                            app.sink_input_ids.retain(|&x| x != id);
+                    CacheUpdate::MarkAppInactive(sink_input_id) => {
+                        // Find the app that has this sink_input_id
+                        for mut entry in cache.apps.iter_mut() {
+                            let (app_name, app) = entry.pair_mut();
+                            if app.sink_input_ids.contains(&sink_input_id) {
+                                app.sink_input_ids.retain(|&x| x != sink_input_id);
+                                // If no more active streams, mark as inactive with timestamp
+                                if app.sink_input_ids.is_empty() {
+                                    app.active = false;
+                                    app.inactive_since = Some(std::time::Instant::now());
+                                    info!("App {} is now inactive, will be removed in 5 minutes if not used", app_name);
+                                }
+                                break;
+                            }
                         }
                     }
                     CacheUpdate::AddSinkInputToApp(app_name, sink_input_id, current_sink) => {
@@ -90,6 +101,9 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                             if !app.sink_input_ids.contains(&sink_input_id) {
                                 app.sink_input_ids.push(sink_input_id);
                             }
+                            // Mark as active and clear inactive timestamp
+                            app.active = true;
+                            app.inactive_since = None;
                             // Update sink if it's different (in case of multiple streams)
                             if app.current_sink != current_sink && app.current_sink != "Unknown" {
                                 debug!("App {} has streams in multiple sinks", app_name);
@@ -102,6 +116,7 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                                 current_sink,
                                 active: true,
                                 sink_input_ids: vec![sink_input_id],
+                                inactive_since: None,
                             };
                             cache.update_app(app_name, app_info);
                         }
@@ -114,11 +129,12 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                             info!("Applying routing rule: {} -> {}", app_name, target_sink_name);
 
                             // Move the sink input to the target sink
-                            std::thread::spawn(move || {
+                            tokio::spawn(async move {
                                 // Find the sink ID for the target
-                                if let Ok(output) = std::process::Command::new("pactl")
+                                if let Ok(output) = tokio::process::Command::new("pactl")
                                     .args(["list", "sinks", "short"])
                                     .output()
+                                    .await
                                 {
                                     let stdout = String::from_utf8_lossy(&output.stdout);
                                     for line in stdout.lines() {
@@ -292,16 +308,16 @@ fn handle_global(
 
         // Binary name extraction will happen in the async thread with pactl
 
+        // Get object.serial for pactl lookup
+        let serial_id =
+            props.get("object.serial").and_then(|s| s.parse::<u32>().ok()).unwrap_or(id);
+
         // We'll determine the final name later after checking pactl
-        let node_info = NodeInfo { app_name: Some(app_name.clone()) };
+        let node_info = NodeInfo { app_name: Some(app_name.clone()), serial_id };
 
         state.nodes.insert(id, node_info);
 
         // Auto-routing will be handled after we know the binary name
-
-        // Get object.serial for pactl lookup
-        let serial_id =
-            props.get("object.serial").and_then(|s| s.parse::<u32>().ok()).unwrap_or(id);
 
         // Get sink connection info asynchronously
         let app_id = serial_id;
@@ -465,8 +481,8 @@ fn handle_global_remove(state: &Rc<RefCell<MonitorState>>, id: u32) {
     if let Some(node_info) = state.nodes.remove(&id) {
         if let Some(app_name) = node_info.app_name {
             let app_name_for_log = app_name.clone();
-            // Mark app as inactive in cache
-            let _ = state.cache_tx.send(CacheUpdate::MarkAppInactive(app_name.clone(), id));
+            // Mark app as inactive in cache using the serial_id
+            let _ = state.cache_tx.send(CacheUpdate::MarkAppInactive(node_info.serial_id));
 
             info!("Audio stream removed: {} (id: {})", app_name_for_log, id);
         }
