@@ -147,3 +147,8 @@ code-quality: lint test
 	@echo "✓ Extension tests passed"
 	@echo "✓ Daemon tests passed"
 	@echo "====================================="
+
+# Install git hooks
+install-hooks:
+	@echo "Installing git hooks..."
+	@./scripts/install-hooks.sh
