@@ -33,13 +33,20 @@ dashmap = "5.5"
 atomic = "0.6"
 nix = { version = "0.27", features = ["fs", "process", "user"] }
 toml = "0.8"
+filetime = "0.2"
 
 [build-dependencies]
 pkg-config = "0.3"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = { version = "0.5", features = ["async_tokio"] }
 tempfile = "3"
+tokio-test = "0.4"
+proptest = "1.4"
+
+[[bench]]
+name = "performance"
+harness = false
 
 [profile.release]
 lto = true

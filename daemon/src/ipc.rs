@@ -276,6 +276,39 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
 
         "RELOAD_CONFIG" => Ok("Config reload not implemented".to_string()),
 
+        "HEALTH" => {
+            // Health check command - returns status and basic info
+            let cache_read = cache.read().await;
+            let sink_count = cache_read.sinks.len();
+            let app_count = cache_read.apps.len();
+            let generation = cache_read.get_generation();
+            drop(cache_read);
+
+            // Check if shared memory file exists and is recent
+            let uid = nix::unistd::Uid::current();
+            let shm_path = format!("/dev/shm/pipewire-volume-mixer-{uid}");
+            let shm_status = match std::fs::metadata(&shm_path) {
+                Ok(metadata) => match metadata.modified() {
+                    Ok(modified) => match modified.elapsed() {
+                        Ok(elapsed) => {
+                            if elapsed.as_secs() > 60 {
+                                format!("STALE ({}s old)", elapsed.as_secs())
+                            } else {
+                                "OK".to_string()
+                            }
+                        }
+                        Err(_) => "UNKNOWN".to_string(),
+                    },
+                    Err(_) => "NO_TIMESTAMP".to_string(),
+                },
+                Err(_) => "MISSING".to_string(),
+            };
+
+            Ok(format!(
+                "sinks={sink_count} apps={app_count} generation={generation} shm_status={shm_status}"
+            ))
+        }
+
         _ => {
             bail!("Unknown command: {}", parts[0]);
         }
@@ -316,8 +349,6 @@ async fn route_app_to_sink(app_name: &str, sink_name: &str) -> Result<()> {
                                 .split('/')
                                 .next_back()
                                 .unwrap_or(binary_path)
-                                .trim_end_matches("-bin")
-                                .trim_end_matches(".exe")
                                 .to_lowercase();
 
                             debug!(

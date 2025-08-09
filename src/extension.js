@@ -113,9 +113,68 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
         if (!backend) return;
         
         let apps = backend.getAppsForSink(this._sink.name);
-        
+        this._updateAppsDisplay(apps);
+    }
+    
+    _updateAppsDisplay(apps) {
         if (apps.length > 0) {
             let appNames = apps.map(app => {
+                return app.active ? app.displayName : `[${app.displayName}]`;
+            }).join(', ');
+            
+            this._currentAppsList.label.set_text(`Apps: ${appNames}`);
+            this._currentAppsList.visible = true;
+        } else {
+            this._currentAppsList.visible = false;
+        }
+    }
+    
+    _forceRefreshApps(movingAppName, targetSinkName) {
+        // Get current text from the label
+        let currentText = this._currentAppsList.label.get_text();
+        let currentApps = [];
+        
+        // Parse current apps from the label text
+        if (currentText && currentText.startsWith('Apps: ')) {
+            let appsText = currentText.substring(6); // Remove "Apps: "
+            if (appsText) {
+                currentApps = appsText.split(', ').map(name => {
+                    let isInactive = name.startsWith('[') && name.endsWith(']');
+                    let displayName = isInactive ? name.slice(1, -1) : name;
+                    return { displayName, active: !isInactive };
+                });
+            }
+        }
+        
+        if (this._sink.name === targetSinkName) {
+            // This is the destination sink - add the app if not already there
+            let hasApp = currentApps.some(a => a.displayName === movingAppName);
+            if (!hasApp) {
+                // Find the app's display name from any sink
+                let foundDisplayName = movingAppName;
+                let isActive = true;
+                
+                // Check all sink items to find the app's display info
+                virtualSinkItemsObjects.forEach(sinkItem => {
+                    let sinkText = sinkItem._currentAppsList.label.get_text();
+                    if (sinkText && sinkText.includes(movingAppName)) {
+                        // Extract whether it's active or not
+                        if (sinkText.includes(`[${movingAppName}]`)) {
+                            isActive = false;
+                        }
+                    }
+                });
+                
+                currentApps.push({ displayName: foundDisplayName, active: isActive });
+            }
+        } else {
+            // This is not the destination - remove the app if present
+            currentApps = currentApps.filter(a => a.displayName !== movingAppName);
+        }
+        
+        // Update the display immediately
+        if (currentApps.length > 0) {
+            let appNames = currentApps.map(app => {
                 return app.active ? app.displayName : `[${app.displayName}]`;
             }).join(', ');
             
@@ -157,29 +216,40 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
                 
                 let isRouting = false; // Prevent multiple rapid clicks
                 
-                // Override the activate behavior to prevent menu closing
-                item.activate = async () => {
+                // Override the activate behavior  
+                item.activate = () => {
                     if (isRouting) return;
+                    isRouting = true;
                     
-                    try {
-                        isRouting = true;
-                        await backend.routeApp(app.name, this._sink.name);
-                        
-                        // Give backend time to update
-                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
-                            // Update all sinks first
-                            updateAllSinks();
-                            
-                            // Rebuild the application list in the dropdown
-                            this._updateApplicationList(this._sinkSelector.menu);
-                            
-                            isRouting = false;
-                            return GLib.SOURCE_REMOVE;
-                        });
-                    } catch (e) {
-                        log(`Virtual Audio Sinks: Error routing app: ${e}`);
-                        isRouting = false;
+                    // Mark that we just routed to prevent menu rebuild
+                    if (this._setLastRouteTime) {
+                        this._setLastRouteTime();
                     }
+                    
+                    // Store destination sink for this app
+                    let targetSink = this._sink.name;
+                    
+                    // Update all sink items immediately - optimistic UI update
+                    virtualSinkItemsObjects.forEach(sinkItem => {
+                        sinkItem._forceRefreshApps(app.name, targetSink);
+                    });
+                    
+                    // Remove this item from the menu optimistically
+                    item.destroy();
+                    
+                    // Fire off the backend request after a small delay to ensure UI updates first
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+                        backend.routeApp(app.name, targetSink).then(() => {
+                            // Success - no need to do anything, UI already updated
+                        }).catch(e => {
+                            log(`Virtual Audio Sinks: Error routing app: ${e}`);
+                            // On error, refresh from backend
+                            updateAllSinks();
+                        }).finally(() => {
+                            isRouting = false;
+                        });
+                        return GLib.SOURCE_REMOVE;
+                    });
                 };
                 
                 menu.addMenuItem(item);
@@ -339,11 +409,21 @@ function enable() {
             
             // Connect submenu open event
             if (selector.menu) {
+                let lastRouteTime = 0;
                 selector.menu.connect('open-state-changed', (menu, open) => {
                     if (open) {
-                        item._updateApplicationList(menu);
+                        // Don't rebuild if we just routed an app (within 500ms)
+                        let now = Date.now();
+                        if (now - lastRouteTime > 500) {
+                            item._updateApplicationList(menu);
+                        }
                     }
                 });
+                
+                // Store reference to update last route time
+                item._setLastRouteTime = () => {
+                    lastRouteTime = Date.now();
+                };
             }
         });
         

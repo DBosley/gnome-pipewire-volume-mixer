@@ -1,3 +1,4 @@
+pub mod app_name_detector;
 pub mod cache;
 pub mod config;
 pub mod ipc;

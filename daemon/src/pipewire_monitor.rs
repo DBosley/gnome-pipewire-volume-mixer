@@ -294,12 +294,14 @@ fn handle_global(
         let app_id = serial_id;
         let app_name_for_log = app_name.clone();
         let cache_tx = state.cache_tx.clone();
+        let default_sink = state.config.routing.default_sink.clone();
 
         std::thread::spawn(move || {
             debug!("Looking up sink for app {} with ID {}", app_name_for_log, app_id);
 
-            // Also try to get the binary name from pactl (more complete than PipeWire properties)
+            // Try to get the binary name and PID from pactl
             let mut extracted_binary_name = None;
+            let mut process_pid = None;
             if let Ok(pactl_output) =
                 std::process::Command::new("pactl").args(["list", "sink-inputs"]).output()
             {
@@ -307,7 +309,7 @@ fn handle_global(
                     let stdout = String::from_utf8_lossy(&pactl_output.stdout);
                     let search_pattern = format!("Sink Input #{app_id}");
                     if let Some(pos) = stdout.find(&search_pattern) {
-                        // Look for application.process.binary in the next several lines
+                        // Look for application.process.binary and PID in the next several lines
                         let lines = stdout[pos..].lines().take(30);
                         for line in lines {
                             if let Some(binary_line) =
@@ -325,10 +327,72 @@ fn handle_global(
                                         extracted_binary_name = Some(extracted.to_string());
                                         debug!("Found binary name from pactl: {}", extracted);
                                     }
-                                    break;
+                                }
+                            } else if let Some(pid_line) =
+                                line.trim().strip_prefix("application.process.id = \"")
+                            {
+                                if let Some(pid_end) = pid_line.find('"') {
+                                    if let Ok(pid) = pid_line[..pid_end].parse::<u32>() {
+                                        process_pid = Some(pid);
+                                        debug!("Found PID from pactl: {}", pid);
+                                    }
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // Try to get window title from X11/Wayland if we have a PID
+            // Check both the process and its parent(s) for windows
+            let mut window_title = None;
+            if let Some(pid) = process_pid {
+                let mut current_pid = pid;
+                let mut attempts = 0;
+
+                while attempts < 3 && window_title.is_none() {
+                    // Try to get window title for current PID
+                    if let Ok(xdotool_output) = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(format!("xdotool search --pid {current_pid} 2>/dev/null | head -1 | xargs -r xdotool getwindowname 2>/dev/null"))
+                        .output()
+                    {
+                        let title = String::from_utf8_lossy(&xdotool_output.stdout).trim().to_string();
+                        if !title.is_empty()
+                            && title != "XdndCollectionWindowImp"
+                            && title != "Wine System Tray"
+                            && title != "Default IME"
+                            && !title.starts_with("steam_app") {
+                            window_title = Some(title);
+                            debug!("Found window title for PID {}: {}", current_pid, window_title.as_ref().unwrap());
+                            break;
+                        } else if title.starts_with("steam_app") {
+                            debug!("Ignoring Steam window title '{}', will use application.name instead", title);
+                            break; // Don't check parent for Steam apps
+                        }
+                    }
+
+                    // Try to get parent PID
+                    if let Ok(ps_output) = std::process::Command::new("ps")
+                        .args(["-o", "ppid=", "-p", &current_pid.to_string()])
+                        .output()
+                    {
+                        let ppid_str =
+                            String::from_utf8_lossy(&ps_output.stdout).trim().to_string();
+                        if let Ok(ppid) = ppid_str.parse::<u32>() {
+                            if ppid > 1 {
+                                // Don't check init process
+                                debug!("Checking parent PID {} for window title", ppid);
+                                current_pid = ppid;
+                                attempts += 1;
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
                     }
                 }
             }
@@ -367,25 +431,41 @@ fn handle_global(
                                                         "Found app {} connected to sink {}",
                                                         app_name_for_log, sink_name
                                                     );
-                                                    // Use extracted binary name if available, otherwise fall back
-                                                    let final_display_name = extracted_binary_name
-                                                        .as_ref()
-                                                        .map(|name| {
-                                                            // Capitalize first letter
-                                                            let mut chars = name.chars();
-                                                            match chars.next() {
-                                                                None => String::new(),
-                                                                Some(first) => {
-                                                                    first
-                                                                        .to_uppercase()
-                                                                        .collect::<String>()
-                                                                        + chars.as_str()
-                                                                }
+                                                    // Determine the best display name with priority:
+                                                    // 1. Window title from X11/Wayland (most accurate)
+                                                    // 2. application.name if it's not generic
+                                                    // 3. Binary name as fallback
+                                                    let final_display_name = if let Some(title) =
+                                                        window_title.as_ref()
+                                                    {
+                                                        // Use window title if we got it
+                                                        title.clone()
+                                                    } else if !app_name_for_log.is_empty()
+                                                        && !app_name_for_log.contains("WEBRTC")
+                                                        && !app_name_for_log.contains("WebRTC")
+                                                        && !app_name_for_log.contains("wine")
+                                                        && !app_name_for_log.contains("preloader")
+                                                    {
+                                                        // Use application.name if it's meaningful
+                                                        app_name_for_log.clone()
+                                                    } else if let Some(binary_name) =
+                                                        extracted_binary_name.as_ref()
+                                                    {
+                                                        // Capitalize first letter of binary name for display
+                                                        let mut chars = binary_name.chars();
+                                                        match chars.next() {
+                                                            None => String::new(),
+                                                            Some(first) => {
+                                                                first
+                                                                    .to_uppercase()
+                                                                    .collect::<String>()
+                                                                    + chars.as_str()
                                                             }
-                                                        })
-                                                        .unwrap_or_else(|| {
-                                                            app_name_for_log.clone()
-                                                        });
+                                                        }
+                                                    } else {
+                                                        // Last resort - use application.name as-is
+                                                        app_name_for_log.clone()
+                                                    };
 
                                                     // Use the capitalized display name as the key for consistency
                                                     let final_key = final_display_name.clone();
@@ -418,26 +498,39 @@ fn handle_global(
             }
 
             // Fallback if we couldn't get sink info
-            let final_display_name = extracted_binary_name
-                .as_ref()
-                .map(|name| {
-                    // Capitalize first letter
-                    let mut chars = name.chars();
-                    match chars.next() {
-                        None => String::new(),
-                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                    }
-                })
-                .unwrap_or_else(|| app_name_for_log.clone());
+            // Use the same priority as above
+            let final_display_name = if let Some(title) = window_title.as_ref() {
+                // Use window title if we got it
+                title.clone()
+            } else if !app_name_for_log.is_empty()
+                && !app_name_for_log.contains("WEBRTC")
+                && !app_name_for_log.contains("WebRTC")
+                && !app_name_for_log.contains("wine")
+                && !app_name_for_log.contains("preloader")
+            {
+                // Use application.name if it's meaningful
+                app_name_for_log.clone()
+            } else if let Some(binary_name) = extracted_binary_name.as_ref() {
+                // Capitalize first letter of binary name for display
+                let mut chars = binary_name.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                }
+            } else {
+                // Last resort - use application.name as-is
+                app_name_for_log.clone()
+            };
 
             // Use the capitalized display name as the key for consistency
             let final_key = final_display_name.clone();
 
             // Always use AddSinkInputToApp - it will create the app if needed
+            // Use the default sink from config instead of "Unknown"
             let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(
                 final_key.clone(),
                 app_id,
-                "Unknown".to_string(),
+                default_sink,
             ));
 
             // Check if we need to apply a routing rule

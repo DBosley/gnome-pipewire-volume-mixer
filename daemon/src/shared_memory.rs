@@ -3,18 +3,21 @@ use memmap2::{MmapMut, MmapOptions};
 use nix::unistd::Uid;
 use std::fs::OpenOptions;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
 use tokio::time;
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 
 use crate::cache::{AudioCache, CacheSnapshot};
 
 const SHM_SIZE: usize = 64 * 1024; // 64KB
+const STALE_THRESHOLD_SECS: u64 = 30; // Consider memory stale after 30 seconds
 
 pub struct SharedMemoryWriter {
     cache: Arc<RwLock<AudioCache>>,
     mmap: MmapMut,
+    path: String,
+    last_successful_write: SystemTime,
 }
 
 impl SharedMemoryWriter {
@@ -22,13 +25,19 @@ impl SharedMemoryWriter {
         let uid = Uid::current();
         let path = format!("/dev/shm/pipewire-volume-mixer-{uid}");
 
+        let mmap = Self::create_shared_memory(&path)?;
+
+        Ok(Self { cache, mmap, path, last_successful_write: SystemTime::now() })
+    }
+
+    fn create_shared_memory(path: &str) -> Result<MmapMut> {
         // Create or open the shared memory file
         let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&path)
+            .open(path)
             .context("Failed to open shared memory file")?;
 
         // Set the file size
@@ -42,7 +51,27 @@ impl SharedMemoryWriter {
                 .context("Failed to mmap shared memory")?
         };
 
-        Ok(Self { cache, mmap })
+        Ok(mmap)
+    }
+
+    fn recreate_shared_memory(&mut self) -> Result<()> {
+        warn!("Recreating shared memory due to staleness or error");
+
+        // Try to unmap the old memory first
+        drop(std::mem::replace(
+            &mut self.mmap,
+            MmapMut::map_anon(1)?, // Create tiny anonymous map as placeholder
+        ));
+
+        // Remove the old file if it exists
+        let _ = std::fs::remove_file(&self.path);
+
+        // Create new shared memory
+        self.mmap = Self::create_shared_memory(&self.path)?;
+        self.last_successful_write = SystemTime::now();
+
+        info!("Successfully recreated shared memory at {}", self.path);
+        Ok(())
     }
 
     pub async fn run(mut self) {
@@ -52,17 +81,34 @@ impl SharedMemoryWriter {
         let mut interval = time::interval(fast_interval);
         let mut last_generation = 0u64;
         let mut idle_cycles = 0;
+        let mut consecutive_failures = 0;
 
         loop {
             interval.tick().await;
+
+            // Check if shared memory is stale
+            if let Ok(elapsed) = self.last_successful_write.elapsed() {
+                if elapsed.as_secs() > STALE_THRESHOLD_SECS {
+                    warn!(
+                        "Shared memory hasn't been updated for {} seconds, recreating",
+                        elapsed.as_secs()
+                    );
+                    if let Err(e) = self.recreate_shared_memory() {
+                        error!("Failed to recreate shared memory: {}", e);
+                    } else {
+                        // Force a write after recreation
+                        last_generation = 0;
+                    }
+                }
+            }
 
             let current_generation = {
                 let cache = self.cache.read().await;
                 cache.get_generation()
             };
 
-            // Only update if generation changed
-            if current_generation != last_generation {
+            // Only update if generation changed or we need to force an update
+            if current_generation != last_generation || consecutive_failures > 3 {
                 // Get a snapshot of the cache
                 let snapshot = {
                     let cache = self.cache.read().await;
@@ -71,8 +117,21 @@ impl SharedMemoryWriter {
 
                 if let Err(e) = self.write_snapshot(&snapshot) {
                     error!("Failed to write cache to shared memory: {}", e);
+                    consecutive_failures += 1;
+
+                    // Try to recreate shared memory after multiple failures
+                    if consecutive_failures > 3 {
+                        warn!("Multiple write failures, attempting to recreate shared memory");
+                        if let Err(e) = self.recreate_shared_memory() {
+                            error!("Failed to recreate shared memory: {}", e);
+                        } else {
+                            consecutive_failures = 0;
+                        }
+                    }
                 } else {
                     last_generation = current_generation;
+                    self.last_successful_write = SystemTime::now();
+                    consecutive_failures = 0;
                     debug!("Updated shared memory cache (generation {})", current_generation);
 
                     // Reset to fast interval when activity detected
@@ -89,6 +148,22 @@ impl SharedMemoryWriter {
                 if idle_cycles == 10 {
                     interval = time::interval(slow_interval);
                     debug!("Switching to slow update interval");
+                }
+
+                // Periodically write even without changes to keep memory fresh
+                if idle_cycles > 0 && idle_cycles % 100 == 0 {
+                    // Every ~20 seconds on slow interval
+                    let snapshot = {
+                        let cache = self.cache.read().await;
+                        cache.get_snapshot()
+                    };
+
+                    if let Err(e) = self.write_snapshot(&snapshot) {
+                        error!("Failed to write periodic update: {}", e);
+                    } else {
+                        self.last_successful_write = SystemTime::now();
+                        debug!("Wrote periodic update to keep shared memory fresh");
+                    }
                 }
             }
         }
@@ -167,6 +242,12 @@ impl SharedMemoryWriter {
 
         // Ensure changes are written
         self.mmap.flush()?;
+
+        // Update file modification time to reflect the write
+        // This is important for staleness detection
+        if let Ok(_metadata) = std::fs::metadata(&self.path) {
+            let _ = filetime::set_file_mtime(&self.path, filetime::FileTime::now());
+        }
 
         Ok(())
     }
