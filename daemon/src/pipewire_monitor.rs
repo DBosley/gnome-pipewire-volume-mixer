@@ -433,16 +433,37 @@ fn handle_global(
                                                     );
                                                     // Determine the best display name with priority:
                                                     // 1. Window title from X11/Wayland (most accurate)
-                                                    // 2. application.name if it's not generic
-                                                    // 3. Binary name as fallback
+                                                    // 2. Binary name if we have it and app name is generic
+                                                    // 3. application.name if it's not generic
+                                                    // 4. Binary name as fallback
+                                                    // 5. application.name as last resort
                                                     let final_display_name = if let Some(title) =
                                                         window_title.as_ref()
                                                     {
                                                         // Use window title if we got it
                                                         title.clone()
+                                                    } else if app_name_for_log.contains("WEBRTC")
+                                                        || app_name_for_log.contains("WebRTC")
+                                                    {
+                                                        // For WEBRTC apps, prefer binary name
+                                                        if let Some(binary_name) =
+                                                            extracted_binary_name.as_ref()
+                                                        {
+                                                            // Capitalize first letter of binary name for display
+                                                            let mut chars = binary_name.chars();
+                                                            match chars.next() {
+                                                                None => app_name_for_log.clone(),
+                                                                Some(first) => {
+                                                                    first
+                                                                        .to_uppercase()
+                                                                        .collect::<String>()
+                                                                        + chars.as_str()
+                                                                }
+                                                            }
+                                                        } else {
+                                                            app_name_for_log.clone()
+                                                        }
                                                     } else if !app_name_for_log.is_empty()
-                                                        && !app_name_for_log.contains("WEBRTC")
-                                                        && !app_name_for_log.contains("WebRTC")
                                                         && !app_name_for_log.contains("wine")
                                                         && !app_name_for_log.contains("preloader")
                                                     {
@@ -502,9 +523,19 @@ fn handle_global(
             let final_display_name = if let Some(title) = window_title.as_ref() {
                 // Use window title if we got it
                 title.clone()
+            } else if app_name_for_log.contains("WEBRTC") || app_name_for_log.contains("WebRTC") {
+                // For WEBRTC apps, prefer binary name
+                if let Some(binary_name) = extracted_binary_name.as_ref() {
+                    // Capitalize first letter of binary name for display
+                    let mut chars = binary_name.chars();
+                    match chars.next() {
+                        None => app_name_for_log.clone(),
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    }
+                } else {
+                    app_name_for_log.clone()
+                }
             } else if !app_name_for_log.is_empty()
-                && !app_name_for_log.contains("WEBRTC")
-                && !app_name_for_log.contains("WebRTC")
                 && !app_name_for_log.contains("wine")
                 && !app_name_for_log.contains("preloader")
             {

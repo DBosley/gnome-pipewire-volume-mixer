@@ -8,7 +8,7 @@ const ExtensionUtils = imports.misc.extensionUtils;
 const Me = ExtensionUtils.getCurrentExtension();
 const DaemonBackend = Me.imports.daemonBackend.DaemonBackend;
 
-const VIRTUAL_SINKS = [
+var VIRTUAL_SINKS = [
     { name: 'Game', label: 'Game', icon: 'applications-games-symbolic' },
     { name: 'Chat', label: 'Chat', icon: 'user-available-symbolic' },
     { name: 'Media', label: 'Media', icon: 'applications-multimedia-symbolic' }
@@ -20,7 +20,7 @@ let virtualSinkItemsObjects = [];
 let backend = null;
 let menuOpenConnection = null;
 
-const VirtualSinkItem = GObject.registerClass(
+var VirtualSinkItem = GObject.registerClass(
 class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
     _init(sink) {
         super._init();
@@ -90,30 +90,44 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
     }
     
     _updateFromBackend() {
-        if (!backend) return;
-        
-        // Update volume from backend
-        let sinks = backend.getSinks();
-        let sinkInfo = sinks[this._sink.name];
-        
-        if (sinkInfo) {
-            this._slider.block_signal_handler(this._sliderChangedId);
-            this._slider.value = sinkInfo.volume;
-            this._slider.unblock_signal_handler(this._sliderChangedId);
+        try {
+            if (!backend) return;
             
-            this._muted = sinkInfo.muted;
-            this._updateSpeakerIcon(sinkInfo.muted ? 0 : sinkInfo.volume);
+            // Update volume from backend
+            let sinks = backend.getSinks();
+            if (!sinks) return;
+            
+            let sinkInfo = sinks[this._sink.name];
+            
+            if (sinkInfo) {
+                this._slider.block_signal_handler(this._sliderChangedId);
+                this._slider.value = sinkInfo.volume;
+                this._slider.unblock_signal_handler(this._sliderChangedId);
+                
+                this._muted = sinkInfo.muted;
+                this._updateSpeakerIcon(sinkInfo.muted ? 0 : sinkInfo.volume);
+            }
+            
+            // Update app list
+            this._updateCurrentAppsList();
+        } catch (e) {
+            log(`Virtual Audio Sinks: CRITICAL ERROR in _updateFromBackend: ${e}`);
+            log(`Virtual Audio Sinks: Stack trace: ${e.stack}`);
         }
-        
-        // Update app list
-        this._updateCurrentAppsList();
     }
     
     _updateCurrentAppsList() {
-        if (!backend) return;
-        
-        let apps = backend.getAppsForSink(this._sink.name);
-        this._updateAppsDisplay(apps);
+        try {
+            if (!backend) return;
+            
+            let apps = backend.getAppsForSink(this._sink.name);
+            if (!apps) apps = [];
+            
+            this._updateAppsDisplay(apps);
+        } catch (e) {
+            log(`Virtual Audio Sinks: CRITICAL ERROR in _updateCurrentAppsList: ${e}`);
+            log(`Virtual Audio Sinks: Stack trace: ${e.stack}`);
+        }
     }
     
     _updateAppsDisplay(apps) {
@@ -186,14 +200,29 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
     }
     
     _updateApplicationList(menu) {
-        if (!backend) return;
-        
-        // Clear existing menu items
-        menu.removeAll();
-        
-        // Get all apps
-        let allApps = backend.getApps();
-        let ourApps = backend.getAppsForSink(this._sink.name);
+        try {
+            if (!backend) {
+                menu.removeAll();
+                let errorItem = new PopupMenu.PopupMenuItem('⚠️ Daemon not available', false);
+                errorItem.sensitive = false;
+                menu.addMenuItem(errorItem);
+                return;
+            }
+            
+            // Clear existing menu items
+            menu.removeAll();
+            
+            // Get all apps
+            let allApps = backend.getApps();
+            if (!allApps) {
+                let errorItem = new PopupMenu.PopupMenuItem('⚠️ No apps data available', false);
+                errorItem.sensitive = false;
+                menu.addMenuItem(errorItem);
+                return;
+            }
+            
+            let ourApps = backend.getAppsForSink(this._sink.name);
+            if (!ourApps) ourApps = [];
         let ourAppNames = new Set(ourApps.map(a => a.name));
         
         // Get apps not on this sink
@@ -259,29 +288,47 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
             empty.sensitive = false;
             menu.addMenuItem(empty);
         }
+        } catch (e) {
+            log(`Virtual Audio Sinks: CRITICAL ERROR in _updateApplicationList: ${e}`);
+            log(`Virtual Audio Sinks: Stack trace: ${e.stack}`);
+            // Try to show an error in the menu
+            try {
+                menu.removeAll();
+                let errorItem = new PopupMenu.PopupMenuItem('⚠️ Error loading apps', false);
+                errorItem.sensitive = false;
+                menu.addMenuItem(errorItem);
+            } catch (e2) {
+                log(`Virtual Audio Sinks: Failed to show error in menu: ${e2}`);
+            }
+        }
     }
     
     _toggleMute() {
-        if (!backend) return;
-        
-        // Toggle mute state
-        this._muted = !this._muted;
-        
-        // If unmuting and volume was 0, restore to saved volume
-        if (!this._muted && this._slider.value === 0) {
-            this._slider.value = this._mutedVolume || 0.5;
-        }
-        
-        // Update backend
-        backend.setMute(this._sink.name, this._muted).catch(e => {
-            log(`Virtual Audio Sinks: Error setting mute: ${e}`);
-            // Revert mute state on error
+        try {
+            if (!backend) return;
+            
+            // Toggle mute state
             this._muted = !this._muted;
+            
+            // If unmuting and volume was 0, restore to saved volume
+            if (!this._muted && this._slider.value === 0) {
+                this._slider.value = this._mutedVolume || 0.5;
+            }
+            
+            // Update backend
+            backend.setMute(this._sink.name, this._muted).catch(e => {
+                log(`Virtual Audio Sinks: Error setting mute: ${e}`);
+                // Revert mute state on error
+                this._muted = !this._muted;
+                this._updateSpeakerIcon(this._muted ? 0 : this._slider.value);
+            });
+            
+            // Update icon immediately for responsiveness
             this._updateSpeakerIcon(this._muted ? 0 : this._slider.value);
-        });
-        
-        // Update icon immediately for responsiveness
-        this._updateSpeakerIcon(this._muted ? 0 : this._slider.value);
+        } catch (e) {
+            log(`Virtual Audio Sinks: CRITICAL ERROR in _toggleMute: ${e}`);
+            log(`Virtual Audio Sinks: Stack trace: ${e.stack}`);
+        }
     }
     
     _updateSpeakerIcon(volume) {
@@ -300,22 +347,27 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
     }
     
     _sliderChanged() {
-        if (!backend) return;
-        
-        let volume = this._slider.value;
-        
-        // Save volume for unmute
-        if (volume > 0) {
-            this._mutedVolume = volume;
-            this._muted = false;
+        try {
+            if (!backend) return;
+            
+            let volume = this._slider.value;
+            
+            // Save volume for unmute
+            if (volume > 0) {
+                this._mutedVolume = volume;
+                this._muted = false;
+            }
+            
+            this._updateSpeakerIcon(volume);
+            
+            // Update backend
+            backend.setVolume(this._sink.name, volume).catch(e => {
+                log(`Virtual Audio Sinks: Error setting volume: ${e}`);
+            });
+        } catch (e) {
+            log(`Virtual Audio Sinks: CRITICAL ERROR in _sliderChanged: ${e}`);
+            log(`Virtual Audio Sinks: Stack trace: ${e.stack}`);
         }
-        
-        this._updateSpeakerIcon(volume);
-        
-        // Update backend
-        backend.setVolume(this._sink.name, volume).catch(e => {
-            log(`Virtual Audio Sinks: Error setting volume: ${e}`);
-        });
     }
 });
 
@@ -335,10 +387,19 @@ function initBackend() {
 }
 
 function updateAllSinks() {
-    if (!backend) return;
-    virtualSinkItemsObjects.forEach(item => {
-        item._updateFromBackend();
-    });
+    try {
+        if (!backend) return;
+        virtualSinkItemsObjects.forEach(item => {
+            try {
+                item._updateFromBackend();
+            } catch (e) {
+                log(`Virtual Audio Sinks: Error updating sink item: ${e}`);
+            }
+        });
+    } catch (e) {
+        log(`Virtual Audio Sinks: CRITICAL ERROR in updateAllSinks: ${e}`);
+        log(`Virtual Audio Sinks: Stack trace: ${e.stack}`);
+    }
 }
 
 // eslint-disable-next-line no-unused-vars
@@ -372,9 +433,14 @@ function enable() {
         let aggregateMenu = Main.panel.statusArea.aggregateMenu;
         if (aggregateMenu && aggregateMenu.menu) {
             menuOpenConnection = aggregateMenu.menu.connect('open-state-changed', (menu, open) => {
-                if (open) {
-                    // Update all sinks when menu opens
-                    updateAllSinks();
+                try {
+                    if (open) {
+                        // Update all sinks when menu opens
+                        updateAllSinks();
+                    }
+                } catch (e) {
+                    log(`Virtual Audio Sinks: CRITICAL ERROR in menu open handler: ${e}`);
+                    log(`Virtual Audio Sinks: Stack trace: ${e.stack}`);
                 }
             });
         }
@@ -411,12 +477,17 @@ function enable() {
             if (selector.menu) {
                 let lastRouteTime = 0;
                 selector.menu.connect('open-state-changed', (menu, open) => {
-                    if (open) {
-                        // Don't rebuild if we just routed an app (within 500ms)
-                        let now = Date.now();
-                        if (now - lastRouteTime > 500) {
-                            item._updateApplicationList(menu);
+                    try {
+                        if (open) {
+                            // Don't rebuild if we just routed an app (within 500ms)
+                            let now = Date.now();
+                            if (now - lastRouteTime > 500) {
+                                item._updateApplicationList(menu);
+                            }
                         }
+                    } catch (e) {
+                        log(`Virtual Audio Sinks: CRITICAL ERROR in submenu open handler: ${e}`);
+                        log(`Virtual Audio Sinks: Stack trace: ${e.stack}`);
                     }
                 });
                 

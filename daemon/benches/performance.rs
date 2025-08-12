@@ -44,12 +44,7 @@ fn benchmark_cache_operations(c: &mut Criterion) {
             for i in 0..size {
                 cache.update_sink(
                     format!("Sink_{i}"),
-                    SinkInfo {
-                        id: i as u32,
-                        name: format!("Sink_{i}"),
-                        volume: 0.5,
-                        muted: false,
-                    },
+                    SinkInfo { id: i as u32, name: format!("Sink_{i}"), volume: 0.5, muted: false },
                 );
 
                 if i < size / 2 {

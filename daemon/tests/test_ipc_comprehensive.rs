@@ -273,10 +273,11 @@ async fn test_ipc_stress_test() {
         let command_type = i % 5;
         match command_type {
             0 => {
-                cache.write().await.routing_rules.insert(
-                    format!("StressApp_{i}"),
-                    ["Game", "Chat", "Media"][i % 3].to_string(),
-                );
+                cache
+                    .write()
+                    .await
+                    .routing_rules
+                    .insert(format!("StressApp_{i}"), ["Game", "Chat", "Media"][i % 3].to_string());
             }
             1 => {
                 if let Some(mut sink) = cache.write().await.sinks.get_mut("Game") {

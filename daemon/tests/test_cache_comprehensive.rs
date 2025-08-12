@@ -62,8 +62,7 @@ fn test_cache_performance_bulk_updates() {
 
     let start = Instant::now();
     for i in 0..STRESS_TEST_ITERATIONS {
-        let sink =
-            SinkInfo { id: i as u32, name: format!("Sink_{i}"), volume: 0.5, muted: false };
+        let sink = SinkInfo { id: i as u32, name: format!("Sink_{i}"), volume: 0.5, muted: false };
         cache.update_sink(format!("Sink_{i}"), sink);
     }
     let duration = start.elapsed();
