@@ -18,15 +18,33 @@ async fn setup_test_ipc() -> (Arc<RwLock<AudioCache>>, String) {
         let cache_write = cache.write().await;
         cache_write.update_sink(
             "Game".to_string(),
-            SinkInfo { id: 34, name: "Game Audio".to_string(), volume: 1.0, muted: false },
+            SinkInfo {
+                id: 34,
+                name: "Game Audio".to_string(),
+                volume: 1.0,
+                muted: false,
+                pipewire_id: 34,
+            },
         );
         cache_write.update_sink(
             "Chat".to_string(),
-            SinkInfo { id: 39, name: "Chat Audio".to_string(), volume: 0.57, muted: false },
+            SinkInfo {
+                id: 39,
+                name: "Chat Audio".to_string(),
+                volume: 0.57,
+                muted: false,
+                pipewire_id: 39,
+            },
         );
         cache_write.update_sink(
             "Media".to_string(),
-            SinkInfo { id: 44, name: "Media Audio".to_string(), volume: 0.71, muted: false },
+            SinkInfo {
+                id: 44,
+                name: "Media Audio".to_string(),
+                volume: 0.71,
+                muted: false,
+                pipewire_id: 44,
+            },
         );
     }
 
@@ -102,6 +120,7 @@ async fn test_ipc_health_command() {
                 current_sink: "Game".to_string(),
                 active: true,
                 sink_input_ids: vec![1, 2],
+                pipewire_id: 0,
                 inactive_since: None,
             },
         );
@@ -301,6 +320,7 @@ async fn test_ipc_stress_test() {
                         current_sink: ["Game", "Chat", "Media"][i % 3].to_string(),
                         active: i % 2 == 0,
                         sink_input_ids: vec![i as u32],
+                        pipewire_id: i as u32,
                         inactive_since: None,
                     },
                 );

@@ -29,6 +29,7 @@ async fn test_memory_leak_detection() {
                     current_sink: "Game".to_string(),
                     active: true,
                     sink_input_ids: vec![i],
+                    pipewire_id: i,
                     inactive_since: None,
                 },
             );
@@ -74,6 +75,7 @@ async fn test_cpu_usage_under_load() {
                             name: format!("Sink_{i}"),
                             volume: 0.5,
                             muted: false,
+                            pipewire_id: (thread_id * 10 + i) as u32,
                         },
                     );
                     drop(cache_write);
@@ -117,6 +119,7 @@ async fn test_update_latency_under_stress() {
                     current_sink: ["Game", "Chat", "Media"][i % 3].to_string(),
                     active: i % 2 == 0,
                     sink_input_ids: vec![i as u32],
+                    pipewire_id: i as u32,
                     inactive_since: None,
                 },
             );
@@ -132,7 +135,13 @@ async fn test_update_latency_under_stress() {
         let cache_write = cache.write().await;
         cache_write.update_sink(
             "TestSink".to_string(),
-            SinkInfo { id: 1, name: "TestSink".to_string(), volume: 0.5, muted: false },
+            SinkInfo {
+                id: 1,
+                name: "TestSink".to_string(),
+                volume: 0.5,
+                muted: false,
+                pipewire_id: 1,
+            },
         );
         drop(cache_write);
 
@@ -169,6 +178,7 @@ async fn test_large_scale_app_handling() {
                     current_sink: ["Game", "Chat", "Media"][i % 3].to_string(),
                     active: i < 20, // Only 20 active
                     sink_input_ids: if i < 20 { vec![i as u32] } else { vec![] },
+                    pipewire_id: i as u32,
                     inactive_since: if i >= 20 {
                         Some(std::time::Instant::now() - Duration::from_secs(60))
                     } else {
@@ -216,6 +226,7 @@ async fn test_snapshot_generation_performance() {
                     name: format!("Audio Sink {i}"),
                     volume: 0.5,
                     muted: false,
+                    pipewire_id: i as u32,
                 },
             );
         }
@@ -230,6 +241,7 @@ async fn test_snapshot_generation_performance() {
                     current_sink: format!("Sink_{}", i % 13),
                     active: true,
                     sink_input_ids: vec![i as u32 * 2, i as u32 * 2 + 1],
+                    pipewire_id: i as u32,
                     inactive_since: None,
                 },
             );

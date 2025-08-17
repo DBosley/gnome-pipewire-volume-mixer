@@ -6,15 +6,17 @@ use tracing::{debug, error, info};
 
 mod cache;
 mod config;
+mod dbus_service;
 mod ipc;
+mod pipewire_controller;
 mod pipewire_monitor;
-mod shared_memory;
 
 use cache::AudioCache;
-use config::Config;
+use config::{AppMappings, Config};
+use dbus_service::start_dbus_service;
 use ipc::IpcServer;
+use pipewire_controller::PipeWireController;
 use pipewire_monitor::PipeWireMonitor;
-use shared_memory::SharedMemoryWriter;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -46,16 +48,39 @@ async fn main() -> Result<()> {
     let config = Config::load(&args.config)?;
     debug!("Loaded configuration: {:?}", config);
 
-    // Initialize shared cache
+    // Load app mappings from disk
+    let app_mappings = match AppMappings::load() {
+        Ok(mappings) => {
+            info!("Loaded {} app mappings from disk", mappings.mappings.len());
+            Arc::new(RwLock::new(mappings))
+        }
+        Err(e) => {
+            error!("Failed to load app mappings: {}", e);
+            Arc::new(RwLock::new(AppMappings::default()))
+        }
+    };
+
+    // Initialize shared cache with loaded mappings
     let cache = Arc::new(RwLock::new(AudioCache::new()));
 
-    // Initialize shared memory writer
-    let shm_writer = SharedMemoryWriter::new(cache.clone())?;
+    // Populate cache with loaded mappings
+    {
+        #[allow(unused_mut)]
+        let mut cache_write = cache.write().await;
+        let mappings_read = app_mappings.read().await;
+        for (app_name, sink_name) in &mappings_read.mappings {
+            cache_write.remembered_apps.insert(app_name.clone(), sink_name.clone());
+            debug!("Restored mapping: {} -> {}", app_name, sink_name);
+        }
+    }
 
-    // Start shared memory update loop
-    let shm_handle = tokio::spawn(async move {
-        shm_writer.run().await;
-    });
+    // Initialize PipeWire controller
+    let controller = Arc::new(PipeWireController::new(cache.clone()));
+
+    // Start D-Bus service
+    let _dbus_connection =
+        start_dbus_service(cache.clone(), controller.clone(), app_mappings.clone()).await?;
+    info!("D-Bus service started on org.gnome.PipewireVolumeMixer");
 
     // Initialize IPC server
     let ipc_server = IpcServer::new(cache.clone())?;
@@ -107,7 +132,7 @@ async fn main() -> Result<()> {
     pw_monitor.run().await?;
 
     // Wait for tasks to complete (they shouldn't unless there's an error)
-    tokio::try_join!(shm_handle, ipc_handle, cleanup_handle)?;
+    tokio::try_join!(ipc_handle, cleanup_handle)?;
 
     Ok(())
 }

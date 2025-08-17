@@ -3,6 +3,16 @@ const Main = imports.ui.main;
 const PopupMenu = imports.ui.popupMenu;
 const Slider = imports.ui.slider;
 
+// Check for debug mode via config file
+const DEBUG_FILE = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'pipewire-volume-mixer', 'debug']);
+const DEBUG_MODE = GLib.file_test(DEBUG_FILE, GLib.FileTest.EXISTS);
+
+function _debugLog(message) {
+    if (DEBUG_MODE) {
+        log(message);
+    }
+}
+
 // Import our backends
 const ExtensionUtils = imports.misc.extensionUtils;
 const Me = ExtensionUtils.getCurrentExtension();
@@ -19,6 +29,10 @@ let virtualSinkItems = [];
 let virtualSinkItemsObjects = [];
 let backend = null;
 let menuOpenConnection = null;
+let backendSignalIds = [];
+let updateDebounceTimer = null;
+const UPDATE_DEBOUNCE_MS = 100; // Batch updates within 100ms window
+let lastProcessedGeneration = 0; // Track last generation to skip duplicate updates
 
 var VirtualSinkItem = GObject.registerClass(
 class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
@@ -143,60 +157,30 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
         }
     }
     
-    _forceRefreshApps(movingAppName, targetSinkName) {
-        // Get current text from the label
-        let currentText = this._currentAppsList.label.get_text();
-        let currentApps = [];
+    _forceRefreshApps(movingAppName, movingAppDisplayName, targetSinkName) {
+        log(`Virtual Audio Sinks: _forceRefreshApps called with name=${movingAppName}, display=${movingAppDisplayName}, target=${targetSinkName}`);
         
-        // Parse current apps from the label text
-        if (currentText && currentText.startsWith('Apps: ')) {
-            let appsText = currentText.substring(6); // Remove "Apps: "
-            if (appsText) {
-                currentApps = appsText.split(', ').map(name => {
-                    let isInactive = name.startsWith('[') && name.endsWith(']');
-                    let displayName = isInactive ? name.slice(1, -1) : name;
-                    return { displayName, active: !isInactive };
-                });
-            }
-        }
+        // Instead of parsing UI text, get the actual apps from backend
+        let currentApps = backend.getAppsForSink(this._sink.name) || [];
         
         if (this._sink.name === targetSinkName) {
             // This is the destination sink - add the app if not already there
-            let hasApp = currentApps.some(a => a.displayName === movingAppName);
+            let hasApp = currentApps.some(a => a.name === movingAppName);
             if (!hasApp) {
-                // Find the app's display name from any sink
-                let foundDisplayName = movingAppName;
-                let isActive = true;
-                
-                // Check all sink items to find the app's display info
-                virtualSinkItemsObjects.forEach(sinkItem => {
-                    let sinkText = sinkItem._currentAppsList.label.get_text();
-                    if (sinkText && sinkText.includes(movingAppName)) {
-                        // Extract whether it's active or not
-                        if (sinkText.includes(`[${movingAppName}]`)) {
-                            isActive = false;
-                        }
-                    }
+                // Create a fake app object for optimistic update
+                currentApps.push({ 
+                    name: movingAppName,
+                    displayName: movingAppDisplayName,
+                    active: true 
                 });
-                
-                currentApps.push({ displayName: foundDisplayName, active: isActive });
             }
         } else {
             // This is not the destination - remove the app if present
-            currentApps = currentApps.filter(a => a.displayName !== movingAppName);
+            currentApps = currentApps.filter(a => a.name !== movingAppName);
         }
         
-        // Update the display immediately
-        if (currentApps.length > 0) {
-            let appNames = currentApps.map(app => {
-                return app.active ? app.displayName : `[${app.displayName}]`;
-            }).join(', ');
-            
-            this._currentAppsList.label.set_text(`Apps: ${appNames}`);
-            this._currentAppsList.visible = true;
-        } else {
-            this._currentAppsList.visible = false;
-        }
+        // Update the display immediately using displayName
+        this._updateAppsDisplay(currentApps);
     }
     
     _updateApplicationList(menu) {
@@ -240,6 +224,7 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
             menu.addMenuItem(header);
             
             availableApps.forEach(app => {
+                log(`Virtual Audio Sinks: Available app - name: ${app.name}, displayName: ${app.displayName}, active: ${app.active}, displayName type: ${typeof app.displayName}`);
                 let label = app.active ? app.displayName : `[${app.displayName}]`;
                 let item = new PopupMenu.PopupMenuItem(label);
                 
@@ -259,8 +244,9 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
                     let targetSink = this._sink.name;
                     
                     // Update all sink items immediately - optimistic UI update
+                    log(`Virtual Audio Sinks: About to call _forceRefreshApps with app.name='${app.name}', app.displayName='${app.displayName}'`);
                     virtualSinkItemsObjects.forEach(sinkItem => {
-                        sinkItem._forceRefreshApps(app.name, targetSink);
+                        sinkItem._forceRefreshApps(app.name, app.displayName || app.name, targetSink);
                     });
                     
                     // Remove this item from the menu optimistically
@@ -268,10 +254,13 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
                     
                     // Fire off the backend request after a small delay to ensure UI updates first
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+                        log(`Virtual Audio Sinks: Routing ${app.name} (display: ${app.displayName}) to ${targetSink}`);
                         backend.routeApp(app.name, targetSink).then(() => {
                             // Success - no need to do anything, UI already updated
                         }).catch(e => {
                             log(`Virtual Audio Sinks: Error routing app: ${e}`);
+                            // Show error to user
+                            Main.notifyError('Audio Routing Failed', `Could not route ${app.displayName || app.name} to ${targetSink}`);
                             // On error, refresh from backend
                             updateAllSinks();
                         }).finally(() => {
@@ -402,6 +391,22 @@ function updateAllSinks() {
     }
 }
 
+// Debounced version of updateAllSinks to batch rapid updates
+function debouncedUpdateAllSinks() {
+    // Clear any pending update
+    if (updateDebounceTimer) {
+        GLib.source_remove(updateDebounceTimer);
+        updateDebounceTimer = null;
+    }
+    
+    // Schedule update after debounce period
+    updateDebounceTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, UPDATE_DEBOUNCE_MS, () => {
+        updateDebounceTimer = null;
+        updateAllSinks();
+        return GLib.SOURCE_REMOVE;
+    });
+}
+
 // eslint-disable-next-line no-unused-vars
 function init() {
     log('Virtual Audio Sinks: Extension initialized');
@@ -426,6 +431,62 @@ function enable() {
         return;
     }
     
+    // Connect to backend signals for live updates
+    if (backend && backend._dbusBackend) {
+        const appRoutedCallback = (appName, sinkName) => {
+            log(`Virtual Audio Sinks: App ${appName} routed to ${sinkName}, updating UI`);
+            // Don't update if menu is closed - we'll refresh when it opens
+            let aggregateMenu = Main.panel.statusArea.aggregateMenu;
+            if (aggregateMenu && aggregateMenu.menu && aggregateMenu.menu.isOpen) {
+                debouncedUpdateAllSinks();
+            }
+        };
+        backend._dbusBackend.connect('applicationRouted', appRoutedCallback);
+        backendSignalIds.push({
+            signal: 'applicationRouted',
+            callback: appRoutedCallback
+        });
+        
+        const stateChangedCallback = (generation) => {
+            log(`Virtual Audio Sinks: State changed (generation ${generation}), updating UI`);
+            
+            // Skip if we've already processed this generation
+            if (generation && generation <= lastProcessedGeneration) {
+                log(`Virtual Audio Sinks: Skipping duplicate update for generation ${generation}`);
+                return;
+            }
+            
+            if (generation) {
+                lastProcessedGeneration = generation;
+            }
+            
+            // Don't update if menu is closed - we'll refresh when it opens
+            let aggregateMenu = Main.panel.statusArea.aggregateMenu;
+            if (aggregateMenu && aggregateMenu.menu && aggregateMenu.menu.isOpen) {
+                debouncedUpdateAllSinks();
+            }
+        };
+        backend._dbusBackend.connect('stateChanged', stateChangedCallback);
+        backendSignalIds.push({
+            signal: 'stateChanged', 
+            callback: stateChangedCallback
+        });
+        
+        const appsChangedCallback = (added, removed) => {
+            log(`Virtual Audio Sinks: Apps changed (added: ${added}, removed: ${removed}), updating UI`);
+            // Don't update if menu is closed - we'll refresh when it opens
+            let aggregateMenu = Main.panel.statusArea.aggregateMenu;
+            if (aggregateMenu && aggregateMenu.menu && aggregateMenu.menu.isOpen) {
+                debouncedUpdateAllSinks();
+            }
+        };
+        backend._dbusBackend.connect('applicationsChanged', appsChangedCallback);
+        backendSignalIds.push({
+            signal: 'applicationsChanged',
+            callback: appsChangedCallback
+        });
+    }
+    
     try {
         volumeMenu = Main.panel.statusArea.aggregateMenu._volume._volumeMenu;
         
@@ -435,8 +496,19 @@ function enable() {
             menuOpenConnection = aggregateMenu.menu.connect('open-state-changed', (menu, open) => {
                 try {
                     if (open) {
-                        // Update all sinks when menu opens
-                        updateAllSinks();
+                        // Force refresh from backend to get current state
+                        log('Virtual Audio Sinks: Menu opened, refreshing from backend');
+                        if (backend && backend._dbusBackend) {
+                            // Force the daemon to refresh and then reload our state
+                            backend._dbusBackend.refreshState().then(() => {
+                                let apps = backend.getApps();
+                                log(`Virtual Audio Sinks: Apps after refresh: ${JSON.stringify(apps)}`);
+                                updateAllSinks();
+                            });
+                        } else {
+                            // No refresh needed, just update
+                            updateAllSinks();
+                        }
                     }
                 } catch (e) {
                     log(`Virtual Audio Sinks: CRITICAL ERROR in menu open handler: ${e}`);
@@ -506,6 +578,12 @@ function enable() {
 }
 
 function disable() {
+    // Clear any pending debounced updates
+    if (updateDebounceTimer) {
+        GLib.source_remove(updateDebounceTimer);
+        updateDebounceTimer = null;
+    }
+    
     // Disconnect menu handler
     if (menuOpenConnection) {
         let aggregateMenu = Main.panel.statusArea.aggregateMenu;
@@ -514,6 +592,14 @@ function disable() {
         }
         menuOpenConnection = null;
     }
+    
+    // Disconnect backend signals
+    if (backend && backend._dbusBackend) {
+        backendSignalIds.forEach(({ signal, callback }) => {
+            backend._dbusBackend.disconnect(signal, callback);
+        });
+    }
+    backendSignalIds = [];
     
     // Destroy menu items
     virtualSinkItems.forEach(item => {

@@ -19,9 +19,9 @@ pub struct PipeWireMonitor {
 
 enum CacheUpdate {
     UpdateSink(String, SinkInfo),
-    MarkAppInactive(u32),                   // sink_input_id
-    AddSinkInputToApp(String, u32, String), // app_display_name, sink_input_id, current_sink
-    CheckRoutingRule(String, u32),          // app_name, sink_input_id
+    MarkAppInactive(u32),                                   // sink_input_id
+    AddSinkInputToApp(String, String, String, u32, String), // app_name, display_name, binary_name, sink_input_id, current_sink
+    CheckRoutingRule(String, u32),                          // app_name, sink_input_id
 }
 
 struct MonitorState {
@@ -93,7 +93,7 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                             }
                         }
                     }
-                    CacheUpdate::AddSinkInputToApp(app_name, sink_input_id, current_sink) => {
+                    CacheUpdate::AddSinkInputToApp(app_name, display_name, binary_name, sink_input_id, current_sink) => {
                         if let Some(mut app) = cache.apps.get_mut(&app_name) {
                             if !app.sink_input_ids.contains(&sink_input_id) {
                                 app.sink_input_ids.push(sink_input_id);
@@ -101,6 +101,10 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                             // Mark as active and clear inactive timestamp
                             app.active = true;
                             app.inactive_since = None;
+                            // Update display name if we have a better one
+                            if !display_name.is_empty() && display_name != app_name {
+                                app.display_name = display_name;
+                            }
                             // Update sink if it's different (in case of multiple streams)
                             if app.current_sink != current_sink && app.current_sink != "Unknown" {
                                 debug!("App {} has streams in multiple sinks", app_name);
@@ -108,11 +112,12 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                         } else {
                             // App doesn't exist yet, create it with minimal info
                             let app_info = AppInfo {
-                                display_name: app_name.clone(),
-                                binary_name: app_name.to_lowercase(),
+                                display_name,
+                                binary_name,
                                 current_sink,
                                 active: true,
                                 sink_input_ids: vec![sink_input_id],
+                                pipewire_id: sink_input_id,  // Use sink_input_id as pipewire_id
                                 inactive_since: None,
                             };
                             cache.update_app(app_name, app_info);
@@ -216,7 +221,13 @@ fn handle_global(
         // Check if it's one of our virtual sinks
         if state.config.virtual_sinks.iter().any(|s| s.name == node_name) {
             // Store the sink with ID, we'll get the actual volume separately
-            let sink_info = SinkInfo { id, name: node_name.to_string(), volume: 1.0, muted: false };
+            let sink_info = SinkInfo {
+                id,
+                name: node_name.to_string(),
+                volume: 1.0,
+                muted: false,
+                pipewire_id: id,
+            };
 
             // Update cache asynchronously
             let _ = state.cache_tx.send(CacheUpdate::UpdateSink(node_name.to_string(), sink_info));
@@ -246,6 +257,7 @@ fn handle_global(
                                     name: sink_name.clone(),
                                     volume,
                                     muted,
+                                    pipewire_id: sink_id,
                                 };
                                 let _ =
                                     cache_tx.send(CacheUpdate::UpdateSink(sink_name, sink_info));
@@ -351,24 +363,37 @@ fn handle_global(
                 let mut attempts = 0;
 
                 while attempts < 3 && window_title.is_none() {
-                    // Try to get window title for current PID
+                    // Try to get window title for current PID - check all windows and pick the best one
                     if let Ok(xdotool_output) = std::process::Command::new("sh")
                         .arg("-c")
-                        .arg(format!("xdotool search --pid {current_pid} 2>/dev/null | head -1 | xargs -r xdotool getwindowname 2>/dev/null"))
+                        .arg(format!("xdotool search --pid {current_pid} 2>/dev/null | while read wid; do xdotool getwindowname $wid 2>/dev/null; done"))
                         .output()
                     {
-                        let title = String::from_utf8_lossy(&xdotool_output.stdout).trim().to_string();
-                        if !title.is_empty()
-                            && title != "XdndCollectionWindowImp"
-                            && title != "Wine System Tray"
-                            && title != "Default IME"
-                            && !title.starts_with("steam_app") {
-                            window_title = Some(title);
-                            debug!("Found window title for PID {}: {}", current_pid, window_title.as_ref().unwrap());
+                        // Get all window titles for this PID
+                        let titles: Vec<String> = String::from_utf8_lossy(&xdotool_output.stdout)
+                            .lines()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+
+                        // Find the best title (not Default IME, Steam, etc.)
+                        for title in &titles {
+                            if title != "XdndCollectionWindowImp"
+                                && title != "Wine System Tray"
+                                && title != "Default IME"
+                                && title != "Steam"
+                                && title != "SteamVR Status"
+                                && !title.starts_with("steam_app") {
+                                window_title = Some(title.clone());
+                                debug!("Found window title for PID {}: {}", current_pid, title);
+                                break;
+                            }
+                        }
+
+                        // If we found any steam_app window, stop checking parents
+                        if titles.iter().any(|t| t.starts_with("steam_app")) {
+                            debug!("Found Steam window, will use application.name instead");
                             break;
-                        } else if title.starts_with("steam_app") {
-                            debug!("Ignoring Steam window title '{}', will use application.name instead", title);
-                            break; // Don't check parent for Steam apps
                         }
                     }
 
@@ -488,13 +513,19 @@ fn handle_global(
                                                         app_name_for_log.clone()
                                                     };
 
-                                                    // Use the capitalized display name as the key for consistency
-                                                    let final_key = final_display_name.clone();
+                                                    // Use the actual app name as the key, not the display name
+                                                    // This ensures routing works correctly when the UI uses display names
+                                                    let final_key = app_name_for_log.clone();
 
                                                     // Always use AddSinkInputToApp - it will create the app if needed
                                                     let _ = cache_tx.send(
                                                         CacheUpdate::AddSinkInputToApp(
                                                             final_key.clone(),
+                                                            final_display_name.clone(),
+                                                            extracted_binary_name
+                                                                .as_ref()
+                                                                .unwrap_or(&app_name_for_log)
+                                                                .clone(),
                                                             app_id,
                                                             sink_name,
                                                         ),
@@ -553,13 +584,16 @@ fn handle_global(
                 app_name_for_log.clone()
             };
 
-            // Use the capitalized display name as the key for consistency
-            let final_key = final_display_name.clone();
+            // Use the actual app name as the key, not the display name
+            // This ensures routing works correctly when the UI uses display names
+            let final_key = app_name_for_log.clone();
 
             // Always use AddSinkInputToApp - it will create the app if needed
             // Use the default sink from config instead of "Unknown"
             let _ = cache_tx.send(CacheUpdate::AddSinkInputToApp(
                 final_key.clone(),
+                final_display_name.clone(),
+                extracted_binary_name.as_ref().unwrap_or(&app_name_for_log).clone(),
                 app_id,
                 default_sink,
             ));

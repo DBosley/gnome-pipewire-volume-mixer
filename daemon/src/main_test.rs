@@ -10,12 +10,9 @@ use tracing::{debug, info};
 mod cache;
 #[path = "ipc.rs"]
 mod ipc;
-#[path = "shared_memory.rs"]
-mod shared_memory;
 
 use cache::{AppInfo, AudioCache, SinkInfo};
 use ipc::IpcServer;
-use shared_memory::SharedMemoryWriter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -34,17 +31,35 @@ async fn main() -> Result<()> {
         // Add virtual sinks
         cache_write.update_sink(
             "Game".to_string(),
-            SinkInfo { id: 100, name: "Game".to_string(), volume: 0.75, muted: false },
+            SinkInfo {
+                id: 100,
+                name: "Game".to_string(),
+                volume: 0.75,
+                muted: false,
+                pipewire_id: 100,
+            },
         );
 
         cache_write.update_sink(
             "Chat".to_string(),
-            SinkInfo { id: 101, name: "Chat".to_string(), volume: 0.5, muted: false },
+            SinkInfo {
+                id: 101,
+                name: "Chat".to_string(),
+                volume: 0.5,
+                muted: false,
+                pipewire_id: 101,
+            },
         );
 
         cache_write.update_sink(
             "Media".to_string(),
-            SinkInfo { id: 102, name: "Media".to_string(), volume: 1.0, muted: false },
+            SinkInfo {
+                id: 102,
+                name: "Media".to_string(),
+                volume: 1.0,
+                muted: false,
+                pipewire_id: 102,
+            },
         );
 
         // Add some test apps
@@ -56,6 +71,7 @@ async fn main() -> Result<()> {
                 current_sink: "Media".to_string(),
                 active: true,
                 sink_input_ids: vec![200],
+                pipewire_id: 200,
                 inactive_since: None,
             },
         );
@@ -68,18 +84,11 @@ async fn main() -> Result<()> {
                 current_sink: "Chat".to_string(),
                 active: false,
                 sink_input_ids: vec![],
+                pipewire_id: 201,
                 inactive_since: Some(std::time::Instant::now()),
             },
         );
     }
-
-    // Initialize shared memory writer
-    let shm_writer = SharedMemoryWriter::new(cache.clone())?;
-
-    // Start shared memory update loop
-    let _shm_handle = tokio::spawn(async move {
-        shm_writer.run().await;
-    });
 
     // Start IPC server
     let ipc_server = IpcServer::new(cache.clone())?;

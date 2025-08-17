@@ -9,6 +9,7 @@ pub struct SinkInfo {
     pub name: String,
     pub volume: f32,
     pub muted: bool,
+    pub pipewire_id: u32, // Add pipewire_id field for D-Bus
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +19,7 @@ pub struct AppInfo {
     pub current_sink: String,
     pub active: bool,
     pub sink_input_ids: Vec<u32>,
+    pub pipewire_id: u32, // Add pipewire_id field for D-Bus
     #[serde(skip)]
     #[allow(dead_code)] // Used for TTL tracking but not directly read
     pub inactive_since: Option<std::time::Instant>,
@@ -72,6 +74,7 @@ impl AudioCache {
         self.increment_generation();
     }
 
+    #[allow(dead_code)] // May be used for D-Bus state retrieval
     pub fn get_snapshot(&self) -> CacheSnapshot {
         CacheSnapshot {
             generation: self.get_generation(),

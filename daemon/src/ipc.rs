@@ -108,6 +108,7 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
                             current_sink: sink_name.to_string(),
                             active: false,
                             sink_input_ids: vec![],
+                            pipewire_id: 0, // Default ID for new app
                             inactive_since: Some(std::time::Instant::now()),
                         };
                         cache.write().await.update_app(app_name.to_string(), app_info);
@@ -284,29 +285,7 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
             let generation = cache_read.get_generation();
             drop(cache_read);
 
-            // Check if shared memory file exists and is recent
-            let uid = nix::unistd::Uid::current();
-            let shm_path = format!("/dev/shm/pipewire-volume-mixer-{uid}");
-            let shm_status = match std::fs::metadata(&shm_path) {
-                Ok(metadata) => match metadata.modified() {
-                    Ok(modified) => match modified.elapsed() {
-                        Ok(elapsed) => {
-                            if elapsed.as_secs() > 60 {
-                                format!("STALE ({}s old)", elapsed.as_secs())
-                            } else {
-                                "OK".to_string()
-                            }
-                        }
-                        Err(_) => "UNKNOWN".to_string(),
-                    },
-                    Err(_) => "NO_TIMESTAMP".to_string(),
-                },
-                Err(_) => "MISSING".to_string(),
-            };
-
-            Ok(format!(
-                "sinks={sink_count} apps={app_count} generation={generation} shm_status={shm_status}"
-            ))
+            Ok(format!("sinks={sink_count} apps={app_count} generation={generation} status=OK"))
         }
 
         _ => {

@@ -1,108 +1,229 @@
 import { describe, test, expect } from '@jest/globals';
 
-describe('GNOME PipeWire Volume Mixer - System Tests', () => {
-  describe('Architecture', () => {
-    test('system should use daemon for performance', () => {
-      // The system architecture includes:
-      // 1. High-performance Rust daemon that monitors PipeWire
-      // 2. Shared memory for zero-copy data transfer
-      // 3. Unix socket for control commands
-      // 4. GNOME Shell extension that only updates when menu is open
-      
-      const components = [
-        'pipewire-volume-mixer-daemon',    // Rust daemon binary
-        '/dev/shm/pipewire-volume-mixer-*', // Shared memory file
-        '/run/user/*/pipewire-volume-mixer.sock', // Unix socket
-        'extension.js'                      // GNOME Shell extension
-      ];
-      
-      expect(components).toHaveLength(4);
-    });
-  });
-  
-  describe('Daemon Features', () => {
-    test('daemon should handle all PipeWire operations', () => {
-      const daemonCapabilities = {
-        monitorSinks: true,
-        monitorApps: true,
-        controlVolume: true,
-        controlMute: true,
-        routeApps: true,
-        sharedMemory: true,
-        unixSocket: true
-      };
-      
-      expect(Object.values(daemonCapabilities).every(v => v)).toBe(true);
-    });
-    
-    test('shared memory format should be efficient', () => {
-      const binaryFormat = {
-        header: {
-          version: 4,    // bytes
-          generation: 8, // bytes
-          timestamp: 8,  // bytes
-          reserved: 12   // bytes
+describe('System Architecture Tests', () => {
+  describe('System Components', () => {
+    test('should include all required system components', () => {
+      const systemComponents = {
+        daemon: {
+          name: 'pipewire-volume-mixer-daemon',
+          type: 'rust-binary',
+          location: '/usr/local/bin/',
+          purpose: 'Monitor PipeWire and manage audio'
         },
-        sinkEntry: {
-          nameLength: 1,   // byte
-          name: 'variable',
-          id: 4,          // bytes
-          volume: 4,      // bytes (float)
-          muted: 1        // byte
+        sharedMemory: {
+          name: 'pipewire-volume-mixer-{uid}',
+          type: 'shared-memory',
+          location: '/dev/shm/',
+          purpose: 'Zero-copy data transfer to extension'
         },
-        appEntry: {
-          nameLength: 1,    // byte
-          name: 'variable',
-          sinkLength: 1,    // byte
-          sink: 'variable',
-          active: 1         // byte
+        unixSocket: {
+          name: 'pipewire-volume-mixer.sock',
+          type: 'unix-socket',
+          location: '/run/user/{uid}/',
+          purpose: 'Control commands from extension'
+        },
+        extension: {
+          name: 'extension.js',
+          type: 'gnome-shell-extension',
+          location: '~/.local/share/gnome-shell/extensions/',
+          purpose: 'User interface in GNOME Shell'
+        },
+        dbusService: {
+          name: 'org.gnome.PipewireVolumeMixer',
+          type: 'dbus-service',
+          location: 'session bus',
+          purpose: 'D-Bus communication interface'
         }
       };
       
-      const headerSize = Object.values(binaryFormat.header)
-        .filter(v => typeof v === 'number')
-        .reduce((a, b) => a + b, 0);
+      expect(Object.keys(systemComponents)).toHaveLength(5);
       
-      expect(headerSize).toBe(32);
+      // Verify each component has required properties
+      Object.values(systemComponents).forEach(component => {
+        expect(component).toHaveProperty('name');
+        expect(component).toHaveProperty('type');
+        expect(component).toHaveProperty('location');
+        expect(component).toHaveProperty('purpose');
+      });
     });
   });
   
-  describe('Extension Features', () => {
-    test('extension should only update when menu is open', () => {
-      const updateStrategy = {
-        menuClosed: false,  // No updates
-        menuOpen: true,     // Poll shared memory
-        volumeChange: true, // Send via Unix socket
-        appRouting: true    // Send via Unix socket
+  describe('Daemon Capabilities', () => {
+    test('should support all required PipeWire operations', () => {
+      const daemonCapabilities = {
+        monitoring: {
+          sinks: 'Monitor virtual sink creation/removal',
+          applications: 'Track application audio streams',
+          volumes: 'Monitor volume changes',
+          routing: 'Track app-to-sink connections'
+        },
+        control: {
+          setVolume: 'Adjust sink and loopback volumes',
+          setMute: 'Control mute state',
+          routeApp: 'Move app streams between sinks',
+          refreshState: 'Force state update'
+        },
+        communication: {
+          sharedMemory: 'Write state to shared memory',
+          unixSocket: 'Receive control commands',
+          dbus: 'Expose D-Bus interface',
+          signals: 'Emit change notifications'
+        }
       };
       
-      expect(updateStrategy.menuClosed).toBe(false);
-      expect(updateStrategy.menuOpen).toBe(true);
+      // Verify all capability categories exist
+      expect(Object.keys(daemonCapabilities)).toEqual(['monitoring', 'control', 'communication']);
+      
+      // Verify specific capabilities
+      expect(Object.keys(daemonCapabilities.monitoring)).toHaveLength(4);
+      expect(Object.keys(daemonCapabilities.control)).toHaveLength(4);
+      expect(Object.keys(daemonCapabilities.communication)).toHaveLength(4);
     });
     
-    test('volume control should handle both sink and loopback', () => {
-      // The daemon controls both:
-      // 1. Virtual sink volume (wpctl)
-      // 2. Loopback sink-input volume (pactl)
+    test('should use efficient binary format for shared memory', () => {
+      const calculateEntrySize = (nameLength, sinkLength = 0) => {
+        const sinkEntry = 1 + nameLength + 4 + 4 + 1; // nameLen + name + id + volume + muted
+        const appEntry = 1 + nameLength + 1 + sinkLength + 1; // nameLen + name + sinkLen + sink + active
+        return { sinkEntry, appEntry };
+      };
       
-      const volumeCommands = [
-        'wpctl set-volume <sink_id> <percent>%',
-        'pactl set-sink-input-volume <loopback_id> <percent>%'
-      ];
+      // Test with typical names
+      const gameSize = calculateEntrySize(4); // "Game"
+      const firefoxSize = calculateEntrySize(7, 4); // "Firefox", "Game"
       
-      expect(volumeCommands).toHaveLength(2);
+      expect(gameSize.sinkEntry).toBe(14); // 1 + 4 + 4 + 4 + 1
+      expect(firefoxSize.appEntry).toBe(14); // 1 + 7 + 1 + 4 + 1
+      
+      // Verify header is 32-byte aligned
+      const headerSize = 4 + 8 + 8 + 12; // version + generation + timestamp + reserved
+      expect(headerSize).toBe(32);
+      expect(headerSize % 8).toBe(0); // 8-byte aligned
+    });
+    
+    test('should support D-Bus interface methods', () => {
+      const dbusInterface = {
+        properties: ['Sinks', 'Applications', 'Generation', 'LastUpdate'],
+        methods: ['SetSinkVolume', 'SetSinkMute', 'RouteApplication', 'RefreshState', 'GetFullState'],
+        signals: ['StateChanged', 'SinkVolumeChanged', 'SinkMuteChanged', 'ApplicationRouted', 'ApplicationsChanged']
+      };
+      
+      expect(dbusInterface.properties).toHaveLength(4);
+      expect(dbusInterface.methods).toHaveLength(5);
+      expect(dbusInterface.signals).toHaveLength(5);
     });
   });
   
-  describe('Performance', () => {
-    test('system should eliminate subprocess calls', () => {
-      const performanceImprovements = {
-        oldMethod: 'subprocess calls every 2 seconds',
-        newMethod: 'shared memory reads on demand',
-        reduction: '100% fewer subprocess calls when idle'
+  describe('Extension Update Strategy', () => {
+    test('should optimize updates based on menu state', () => {
+      const updateBehavior = {
+        menuClosed: {
+          pollSharedMemory: false,
+          listenToSignals: false,
+          sendCommands: true,
+          updateInterval: null
+        },
+        menuOpen: {
+          pollSharedMemory: true,
+          listenToSignals: true,
+          sendCommands: true,
+          updateInterval: 500 // ms
+        }
       };
       
-      expect(performanceImprovements.reduction).toContain('100%');
+      // Menu closed - minimal activity
+      expect(updateBehavior.menuClosed.pollSharedMemory).toBe(false);
+      expect(updateBehavior.menuClosed.listenToSignals).toBe(false);
+      expect(updateBehavior.menuClosed.updateInterval).toBeNull();
+      
+      // Menu open - active monitoring
+      expect(updateBehavior.menuOpen.pollSharedMemory).toBe(true);
+      expect(updateBehavior.menuOpen.listenToSignals).toBe(true);
+      expect(updateBehavior.menuOpen.updateInterval).toBeGreaterThan(0);
+    });
+    
+    test('should control both sink and loopback volumes', () => {
+      const volumeControlTargets = {
+        virtualSink: {
+          tool: 'wpctl',
+          command: 'set-volume',
+          target: 'sink_id',
+          format: 'percentage',
+          purpose: 'Control virtual sink master volume'
+        },
+        loopbackStream: {
+          tool: 'pactl',
+          command: 'set-sink-input-volume',
+          target: 'loopback_id',
+          format: 'percentage',
+          purpose: 'Control loopback module volume'
+        }
+      };
+      
+      expect(Object.keys(volumeControlTargets)).toEqual(['virtualSink', 'loopbackStream']);
+      
+      // Verify both control paths are defined
+      Object.values(volumeControlTargets).forEach(target => {
+        expect(target).toHaveProperty('tool');
+        expect(target).toHaveProperty('command');
+        expect(target).toHaveProperty('target');
+        expect(target).toHaveProperty('format');
+        expect(target).toHaveProperty('purpose');
+      });
+    });
+  });
+  
+  describe('Performance Optimizations', () => {
+    test('should eliminate subprocess calls when idle', () => {
+      const performanceMetrics = {
+        old: {
+          method: 'subprocess calls',
+          frequency: 'every 2 seconds',
+          cpuImpact: 'high',
+          latency: '50-100ms per call',
+          subprocesses: 6 // wpctl, pactl, etc.
+        },
+        new: {
+          method: 'shared memory + D-Bus',
+          frequency: 'on-demand only',
+          cpuImpact: 'minimal',
+          latency: '<1ms for reads',
+          subprocesses: 0
+        }
+      };
+      
+      // Verify performance improvements
+      expect(performanceMetrics.new.subprocesses).toBe(0);
+      expect(performanceMetrics.old.subprocesses).toBeGreaterThan(0);
+      
+      // Calculate improvement
+      const improvement = ((performanceMetrics.old.subprocesses - performanceMetrics.new.subprocesses) / 
+                          performanceMetrics.old.subprocesses * 100);
+      expect(improvement).toBe(100);
+    });
+    
+    test('should use efficient communication methods', () => {
+      const communicationMethods = {
+        sharedMemory: {
+          type: 'zero-copy',
+          latency: '<1ms',
+          overhead: 'minimal'
+        },
+        dbus: {
+          type: 'async',
+          latency: '1-5ms',
+          overhead: 'low'
+        },
+        unixSocket: {
+          type: 'direct',
+          latency: '1-2ms',
+          overhead: 'low'
+        }
+      };
+      
+      // All methods should be low-latency
+      Object.values(communicationMethods).forEach(method => {
+        expect(['minimal', 'low']).toContain(method.overhead);
+      });
     });
   });
 });

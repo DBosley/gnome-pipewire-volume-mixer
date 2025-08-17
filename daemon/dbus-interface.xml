@@ -1,0 +1,74 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.gnome.PipewireVolumeMixer">
+    <!-- Properties for state caching -->
+    <property name="Sinks" type="a{sv}" access="read">
+      <annotation name="org.freedesktop.DBus.Property.EmitsChangedSignal" value="true"/>
+    </property>
+    
+    <property name="Applications" type="a{sv}" access="read">
+      <annotation name="org.freedesktop.DBus.Property.EmitsChangedSignal" value="true"/>
+    </property>
+    
+    <property name="Generation" type="u" access="read">
+      <annotation name="org.freedesktop.DBus.Property.EmitsChangedSignal" value="true"/>
+    </property>
+    
+    <property name="LastUpdate" type="u" access="read">
+      <annotation name="org.freedesktop.DBus.Property.EmitsChangedSignal" value="true"/>
+    </property>
+    
+    <!-- Methods for commands -->
+    <method name="SetSinkVolume">
+      <arg name="sink_name" type="s" direction="in"/>
+      <arg name="volume" type="d" direction="in"/>
+      <arg name="success" type="b" direction="out"/>
+    </method>
+    
+    <method name="SetSinkMute">
+      <arg name="sink_name" type="s" direction="in"/>
+      <arg name="muted" type="b" direction="in"/>
+      <arg name="success" type="b" direction="out"/>
+    </method>
+    
+    <method name="RouteApplication">
+      <arg name="app_name" type="s" direction="in"/>
+      <arg name="sink_name" type="s" direction="in"/>
+      <arg name="success" type="b" direction="out"/>
+    </method>
+    
+    <method name="RefreshState">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+    </method>
+    
+    <method name="GetFullState">
+      <arg name="state" type="a{sv}" direction="out"/>
+    </method>
+    
+    <!-- Signals for state changes -->
+    <signal name="StateChanged">
+      <arg name="generation" type="u"/>
+    </signal>
+    
+    <signal name="SinkVolumeChanged">
+      <arg name="sink_name" type="s"/>
+      <arg name="volume" type="d"/>
+    </signal>
+    
+    <signal name="SinkMuteChanged">
+      <arg name="sink_name" type="s"/>
+      <arg name="muted" type="b"/>
+    </signal>
+    
+    <signal name="ApplicationRouted">
+      <arg name="app_name" type="s"/>
+      <arg name="sink_name" type="s"/>
+    </signal>
+    
+    <signal name="ApplicationsChanged">
+      <arg name="added" type="as"/>
+      <arg name="removed" type="as"/>
+    </signal>
+  </interface>
+</node>

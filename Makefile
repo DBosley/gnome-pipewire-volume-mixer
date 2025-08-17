@@ -4,7 +4,7 @@ EXTENSION_UUID = pipewire-volume-mixer@extensions.gnome
 EXTENSION_DIR = $(HOME)/.local/share/gnome-shell/extensions/$(EXTENSION_UUID)
 SRC_DIR = src
 FILES = $(SRC_DIR)/extension.js $(SRC_DIR)/metadata.json $(SRC_DIR)/stylesheet.css $(SRC_DIR)/prefs.js \
-        $(SRC_DIR)/daemonBackend.js $(SRC_DIR)/sharedMemory.js $(SRC_DIR)/ipcClient.js
+        $(SRC_DIR)/daemonBackend.js $(SRC_DIR)/dbusBackend.js $(SRC_DIR)/ipcClient.js
 
 .PHONY: all install uninstall enable disable restart reload package clean daemon-build daemon-install daemon-start daemon-stop daemon-status daemon-restart daemon-reload daemon-logs daemon-logs-recent daemon-check reinstall test lint code-quality extension-test extension-lint daemon-test daemon-lint
 
@@ -81,10 +81,7 @@ daemon-reload: daemon-restart
 	@echo "Alias for daemon-restart"
 
 # Helpful development targets
-reload: disable enable
-	@echo "Extension reloaded (may need manual GNOME Shell restart)"
-
-reinstall: install reload
+reinstall: install disable enable
 	@echo "Extension reinstalled and reloaded"
 
 daemon-logs-recent:
@@ -152,3 +149,27 @@ code-quality: lint test
 install-hooks:
 	@echo "Installing git hooks..."
 	@./scripts/install-hooks.sh
+
+# Debug mode management
+debug-on:
+	@echo "Enabling debug mode for GNOME PipeWire Volume Mixer..."
+	@mkdir -p ~/.config/pipewire-volume-mixer
+	@touch ~/.config/pipewire-volume-mixer/debug
+	@echo "Debug mode ENABLED"
+	@echo ""
+	@echo "Restart GNOME Shell to apply:"
+	@echo "  X11: Alt+F2, type 'r', Enter"
+	@echo "  Wayland: Log out and back in"
+	@echo ""
+	@echo "View logs with: make debug-logs"
+
+debug-off:
+	@echo "Disabling debug mode..."
+	@rm -f ~/.config/pipewire-volume-mixer/debug
+	@echo "Debug mode DISABLED"
+	@echo ""
+	@echo "Restart GNOME Shell to apply"
+
+debug-logs:
+	@echo "Showing debug logs (Ctrl+C to stop)..."
+	@journalctl /usr/bin/gnome-shell -f | grep --color=always "Virtual Audio"

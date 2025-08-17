@@ -10,7 +10,13 @@ fn test_cache_creation() {
 fn test_sink_operations() {
     let cache = AudioCache::new();
 
-    let sink = SinkInfo { id: 42, name: "Test Sink".to_string(), volume: 0.75, muted: false };
+    let sink = SinkInfo {
+        id: 42,
+        name: "Test Sink".to_string(),
+        volume: 0.75,
+        muted: false,
+        pipewire_id: 42,
+    };
 
     cache.update_sink("Test Sink".to_string(), sink.clone());
 
@@ -29,6 +35,7 @@ fn test_app_operations() {
         current_sink: "Media".to_string(),
         active: true,
         sink_input_ids: vec![123, 456],
+        pipewire_id: 100,
         inactive_since: None,
     };
 
@@ -46,7 +53,7 @@ fn test_generation_increment() {
 
     cache.update_sink(
         "Test".to_string(),
-        SinkInfo { id: 1, name: "Test".to_string(), volume: 1.0, muted: false },
+        SinkInfo { id: 1, name: "Test".to_string(), volume: 1.0, muted: false, pipewire_id: 1 },
     );
 
     let gen2 = cache.get_generation();

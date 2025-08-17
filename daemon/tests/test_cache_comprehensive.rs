@@ -23,6 +23,7 @@ fn test_concurrent_cache_access() {
                     name: format!("Sink_{i}"),
                     volume: 0.5,
                     muted: false,
+                    pipewire_id: (i * 100 + j) as u32,
                 };
                 cache_clone.update_sink(format!("Sink_{i}_{j}"), sink);
             }
@@ -42,7 +43,8 @@ fn test_concurrent_cache_access() {
 fn test_cache_performance_single_update() {
     let cache = AudioCache::new();
 
-    let sink = SinkInfo { id: 1, name: "Test".to_string(), volume: 0.5, muted: false };
+    let sink =
+        SinkInfo { id: 1, name: "Test".to_string(), volume: 0.5, muted: false, pipewire_id: 1 };
 
     let start = Instant::now();
     cache.update_sink("Test".to_string(), sink);
@@ -62,7 +64,13 @@ fn test_cache_performance_bulk_updates() {
 
     let start = Instant::now();
     for i in 0..STRESS_TEST_ITERATIONS {
-        let sink = SinkInfo { id: i as u32, name: format!("Sink_{i}"), volume: 0.5, muted: false };
+        let sink = SinkInfo {
+            id: i as u32,
+            name: format!("Sink_{i}"),
+            volume: 0.5,
+            muted: false,
+            pipewire_id: i as u32,
+        };
         cache.update_sink(format!("Sink_{i}"), sink);
     }
     let duration = start.elapsed();
@@ -82,7 +90,13 @@ fn test_snapshot_performance() {
     for i in 0..50 {
         cache.update_sink(
             format!("Sink_{i}"),
-            SinkInfo { id: i, name: format!("Sink_{i}"), volume: 0.5, muted: false },
+            SinkInfo {
+                id: i,
+                name: format!("Sink_{i}"),
+                volume: 0.5,
+                muted: false,
+                pipewire_id: i,
+            },
         );
     }
 
@@ -95,6 +109,7 @@ fn test_snapshot_performance() {
                 current_sink: "Game".to_string(),
                 active: true,
                 sink_input_ids: vec![i * 2, i * 2 + 1],
+                pipewire_id: i,
                 inactive_since: None,
             },
         );
@@ -126,6 +141,7 @@ fn test_memory_cleanup() {
                 current_sink: "Game".to_string(),
                 active: false,
                 sink_input_ids: vec![],
+                pipewire_id: i + 100,
                 inactive_since: Some(Instant::now() - Duration::from_secs(400)), // Old inactive
             },
         );
@@ -141,6 +157,7 @@ fn test_memory_cleanup() {
                 current_sink: "Media".to_string(),
                 active: true,
                 sink_input_ids: vec![i],
+                pipewire_id: i + 200,
                 inactive_since: None,
             },
         );
@@ -173,6 +190,7 @@ fn test_routing_rules_persistence() {
             current_sink: "Media".to_string(),
             active: true,
             sink_input_ids: vec![1],
+            pipewire_id: 0,
             inactive_since: None,
         },
     );
@@ -213,6 +231,7 @@ fn test_cache_with_special_characters() {
                 current_sink: "Game".to_string(),
                 active: true,
                 sink_input_ids: vec![1],
+                pipewire_id: 0,
                 inactive_since: None,
             },
         );
@@ -240,6 +259,7 @@ async fn test_async_cache_operations() {
                         name: format!("AsyncSink_{i}"),
                         volume: 0.5,
                         muted: false,
+                        pipewire_id: (i * 100 + j) as u32,
                     },
                 );
                 drop(cache_write);
@@ -283,6 +303,7 @@ fn test_wine_app_detection() {
                 current_sink: "Game".to_string(),
                 active: true,
                 sink_input_ids: vec![1],
+                pipewire_id: 0,
                 inactive_since: None,
             },
         );
@@ -301,10 +322,11 @@ fn test_cache_memory_usage() {
         cache.update_sink(
             format!("Sink_{i}"),
             SinkInfo {
-                id: i as u32,
+                id: i,
                 name: format!("Very_Long_Sink_Name_To_Test_Memory_Usage_{i}"),
                 volume: 0.5,
                 muted: false,
+                pipewire_id: i,
             },
         );
 
@@ -315,7 +337,8 @@ fn test_cache_memory_usage() {
                 binary_name: format!("very_long_binary_name_to_test_memory_{i}"),
                 current_sink: format!("Sink_{}", i % 10),
                 active: i % 2 == 0,
-                sink_input_ids: vec![i as u32 * 2, i as u32 * 2 + 1],
+                sink_input_ids: vec![i * 2, i * 2 + 1],
+                pipewire_id: i,
                 inactive_since: if i % 2 == 1 { Some(Instant::now()) } else { None },
             },
         );

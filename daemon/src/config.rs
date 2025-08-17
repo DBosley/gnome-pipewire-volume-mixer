@@ -2,7 +2,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tracing::{debug, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -77,6 +78,101 @@ impl Config {
             Ok(config)
         } else {
             Ok(Self::default())
+        }
+    }
+}
+
+/// Structure for persisting app-to-sink mappings
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AppMappings {
+    #[serde(default)]
+    pub mappings: HashMap<String, String>,
+    #[serde(default)]
+    pub version: u32,
+}
+
+impl AppMappings {
+    /// Get the default config directory path
+    pub fn config_dir() -> Result<PathBuf> {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USER").map(|user| format!("/home/{user}")))
+            .unwrap_or_else(|_| "/tmp".to_string());
+
+        let config_dir = PathBuf::from(home).join(".config").join("pipewire-volume-mixer");
+        Ok(config_dir)
+    }
+
+    /// Get the default config file path
+    pub fn config_file() -> Result<PathBuf> {
+        Ok(Self::config_dir()?.join("app-mappings.toml"))
+    }
+
+    /// Load app mappings from disk
+    pub fn load() -> Result<Self> {
+        let config_file = Self::config_file()?;
+
+        if config_file.exists() {
+            let contents = fs::read_to_string(&config_file)?;
+            let mappings: AppMappings = toml::from_str(&contents)?;
+            info!("Loaded {} app mappings from {:?}", mappings.mappings.len(), config_file);
+            Ok(mappings)
+        } else {
+            info!("No existing app mappings file at {:?}, using defaults", config_file);
+            Ok(Self::default())
+        }
+    }
+
+    /// Save app mappings to disk
+    pub fn save(&self) -> Result<()> {
+        let config_dir = Self::config_dir()?;
+        let config_file = Self::config_file()?;
+
+        // Create config directory if it doesn't exist
+        if !config_dir.exists() {
+            fs::create_dir_all(&config_dir)?;
+            info!("Created config directory: {:?}", config_dir);
+        }
+
+        // Serialize to TOML
+        let contents = toml::to_string_pretty(self)?;
+
+        // Write to file
+        fs::write(&config_file, contents)?;
+        info!("Saved {} app mappings to {:?}", self.mappings.len(), config_file);
+
+        Ok(())
+    }
+
+    /// Update a mapping and save to disk
+    pub fn update_and_save(&mut self, app_name: String, sink_name: String) -> Result<()> {
+        self.mappings.insert(app_name.clone(), sink_name.clone());
+        self.version += 1;
+        self.save()?;
+        debug!("Updated mapping: {} -> {}", app_name, sink_name);
+        Ok(())
+    }
+
+    /// Get a mapping for an app
+    #[allow(dead_code)]
+    pub fn get(&self, app_name: &str) -> Option<&String> {
+        self.mappings.get(app_name)
+    }
+
+    /// Remove old mappings to prevent unbounded growth
+    #[allow(dead_code)]
+    pub fn cleanup(&mut self, max_entries: usize) {
+        if self.mappings.len() > max_entries {
+            // Keep only the most recent entries
+            // In a real implementation, we'd track last-used times
+            let to_remove = self.mappings.len() - max_entries;
+            let keys_to_remove: Vec<String> =
+                self.mappings.keys().take(to_remove).cloned().collect();
+
+            for key in keys_to_remove {
+                self.mappings.remove(&key);
+            }
+
+            info!("Cleaned up app mappings, kept {} entries", max_entries);
         }
     }
 }

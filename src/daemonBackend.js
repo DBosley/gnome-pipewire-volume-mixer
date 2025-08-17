@@ -1,14 +1,11 @@
-const { GLib } = imports.gi;
+const ExtensionUtils = imports.misc.extensionUtils;
+const Me = ExtensionUtils.getCurrentExtension();
+const DBusBackend = Me.imports.dbusBackend;
 
-// Import our modules
-const SharedMemory = imports.misc.extensionUtils.getCurrentExtension().imports.sharedMemory;
-const IpcClient = imports.misc.extensionUtils.getCurrentExtension().imports.ipcClient;
-
-// Daemon backend that uses shared memory for reads and IPC for writes
+// Daemon backend that uses D-Bus for all communication
 var DaemonBackend = class DaemonBackend {
     constructor() {
-        this._sharedMemory = new SharedMemory.SharedMemoryReader();
-        this._ipcClient = new IpcClient.IpcClient();
+        this._dbusBackend = new DBusBackend.DBusBackend();
         this._available = false;
         this._lastAvailabilityCheck = 0;
     }
@@ -21,7 +18,7 @@ var DaemonBackend = class DaemonBackend {
         }
 
         this._lastAvailabilityCheck = now;
-        this._available = this._sharedMemory.isDaemonAvailable();
+        this._available = this._dbusBackend.isAvailable();
         
         if (!this._available) {
             log('Virtual Audio Sinks: Daemon not available');
@@ -36,95 +33,74 @@ var DaemonBackend = class DaemonBackend {
             return null;
         }
 
-        return this._sharedMemory.readCache();
+        return {
+            sinks: this._dbusBackend.getSinks(),
+            apps: this._dbusBackend.getApps()
+        };
     }
 
     // Get all virtual sinks
     getSinks() {
-        let cache = this.getCache();
-        if (!cache || !cache.sinks) {
+        if (!this.isDaemonAvailable()) {
             return {};
         }
-        return cache.sinks;
+        return this._dbusBackend.getSinks();
     }
 
     // Get all apps
     getApps() {
-        let cache = this.getCache();
-        if (!cache || !cache.apps) {
+        if (!this.isDaemonAvailable()) {
             return {};
         }
-        return cache.apps;
+        return this._dbusBackend.getApps();
     }
 
     // Get apps for a specific sink
     getAppsForSink(sinkName) {
-        let apps = this.getApps();
-        return Object.entries(apps)
-            .filter(([_, app]) => app.currentSink === sinkName)
-            .map(([name, app]) => ({
-                name: name,
-                displayName: app.displayName,
-                active: app.active
-            }));
+        if (!this.isDaemonAvailable()) {
+            return [];
+        }
+        return this._dbusBackend.getAppsForSink(sinkName);
     }
 
     // Route an app to a sink
-    async routeApp(appName, sinkName) {
+    routeApp(appName, sinkName) {
         if (!this.isDaemonAvailable()) {
-            throw new Error('Daemon not available');
+            log('Virtual Audio Sinks: Daemon not available for routing');
+            return Promise.reject(new Error('Daemon not available'));
         }
 
-        try {
-            await this._ipcClient.routeApp(appName, sinkName);
-            // Give daemon time to update cache
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
-                this._sharedMemory.readCache(); // Force cache refresh
-                return GLib.SOURCE_REMOVE;
-            });
-        } catch (e) {
-            log(`Virtual Audio Sinks: Failed to route app: ${e}`);
-            throw e;
-        }
+        return this._dbusBackend.routeApp(appName, sinkName);
     }
 
     // Set volume for a sink
-    async setVolume(sinkName, volume) {
+    setVolume(sinkName, volume) {
         if (!this.isDaemonAvailable()) {
-            throw new Error('Daemon not available');
+            log('Virtual Audio Sinks: Daemon not available for volume change');
+            return;
         }
 
-        try {
-            await this._ipcClient.setVolume(sinkName, volume);
-        } catch (e) {
-            log(`Virtual Audio Sinks: Failed to set volume: ${e}`);
-            throw e;
-        }
+        this._dbusBackend.setSinkVolume(sinkName, volume);
     }
 
     // Set mute state for a sink
-    async setMute(sinkName, muted) {
+    setMute(sinkName, muted) {
         if (!this.isDaemonAvailable()) {
-            throw new Error('Daemon not available');
+            log('Virtual Audio Sinks: Daemon not available for mute change');
+            return;
         }
 
-        try {
-            await this._ipcClient.setMute(sinkName, muted);
-        } catch (e) {
-            log(`Virtual Audio Sinks: Failed to set mute: ${e}`);
-            throw e;
-        }
+        this._dbusBackend.setSinkMute(sinkName, muted);
     }
 
     // Clean up
     destroy() {
-        if (this._sharedMemory) {
-            this._sharedMemory.destroy();
-            this._sharedMemory = null;
+        if (this._dbusBackend) {
+            this._dbusBackend.destroy();
+            this._dbusBackend = null;
         }
-        this._ipcClient = null;
     }
-}
+};
 
 // Export for testing
 if (typeof module !== 'undefined' && module.exports) {
