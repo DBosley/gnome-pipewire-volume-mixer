@@ -119,7 +119,8 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
                 this._slider.unblock_signal_handler(this._sliderChangedId);
                 
                 this._muted = sinkInfo.muted;
-                this._updateSpeakerIcon(sinkInfo.muted ? 0 : sinkInfo.volume);
+                this._updateSpeakerIcon(sinkInfo.volume);
+                this._slider.opacity = sinkInfo.muted ? 128 : 255;
             }
             
             // Update app list
@@ -304,16 +305,20 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
                 this._slider.value = this._mutedVolume || 0.5;
             }
             
+            // Update slider visual state
+            this._slider.opacity = this._muted ? 128 : 255;
+            
             // Update backend
             backend.setMute(this._sink.name, this._muted).catch(e => {
                 log(`Virtual Audio Sinks: Error setting mute: ${e}`);
                 // Revert mute state on error
                 this._muted = !this._muted;
-                this._updateSpeakerIcon(this._muted ? 0 : this._slider.value);
+                this._updateSpeakerIcon(this._slider.value);
+                this._slider.opacity = this._muted ? 128 : 255;
             });
             
             // Update icon immediately for responsiveness
-            this._updateSpeakerIcon(this._muted ? 0 : this._slider.value);
+            this._updateSpeakerIcon(this._slider.value);
         } catch (e) {
             log(`Virtual Audio Sinks: CRITICAL ERROR in _toggleMute: ${e}`);
             log(`Virtual Audio Sinks: Stack trace: ${e.stack}`);
@@ -332,7 +337,10 @@ class VirtualSinkItem extends PopupMenu.PopupBaseMenuItem {
             iconName = 'audio-volume-high-symbolic';
         }
         
-        this._speakerIcon.child.icon_name = iconName;
+        // Simply update the icon name
+        if (this._speakerIcon && this._speakerIcon.child) {
+            this._speakerIcon.child.icon_name = iconName;
+        }
     }
     
     _sliderChanged() {

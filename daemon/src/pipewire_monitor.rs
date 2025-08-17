@@ -358,6 +358,8 @@ fn handle_global(
             // Try to get window title from X11/Wayland if we have a PID
             // Check both the process and its parent(s) for windows
             let mut window_title = None;
+            let mut ultimate_parent_name = None; // Track the highest-level parent process name
+
             if let Some(pid) = process_pid {
                 let mut current_pid = pid;
                 let mut attempts = 0;
@@ -397,19 +399,42 @@ fn handle_global(
                         }
                     }
 
-                    // Try to get parent PID
+                    // Try to get parent PID and process name
                     if let Ok(ps_output) = std::process::Command::new("ps")
-                        .args(["-o", "ppid=", "-p", &current_pid.to_string()])
+                        .args(["-o", "ppid=,comm=", "-p", &current_pid.to_string()])
                         .output()
                     {
-                        let ppid_str =
-                            String::from_utf8_lossy(&ps_output.stdout).trim().to_string();
-                        if let Ok(ppid) = ppid_str.parse::<u32>() {
-                            if ppid > 1 {
-                                // Don't check init process
-                                debug!("Checking parent PID {} for window title", ppid);
-                                current_pid = ppid;
-                                attempts += 1;
+                        let ps_str = String::from_utf8_lossy(&ps_output.stdout).trim().to_string();
+                        let parts: Vec<&str> = ps_str.splitn(2, ' ').collect();
+
+                        if !parts.is_empty() {
+                            if let Ok(ppid) = parts[0].trim().parse::<u32>() {
+                                if ppid > 1 {
+                                    // Get the parent process name
+                                    if parts.len() == 2 {
+                                        let parent_name = parts[1].trim();
+                                        // Skip common system processes
+                                        if !parent_name.is_empty()
+                                            && parent_name != "systemd"
+                                            && parent_name != "init"
+                                            && !parent_name.starts_with("gnome-shell")
+                                            && !parent_name.starts_with("gdm")
+                                        {
+                                            ultimate_parent_name = Some(parent_name.to_string());
+                                            debug!(
+                                                "Found parent process: {} (PID: {})",
+                                                parent_name, ppid
+                                            );
+                                        }
+                                    }
+
+                                    // Don't check init process
+                                    debug!("Checking parent PID {} for window title", ppid);
+                                    current_pid = ppid;
+                                    attempts += 1;
+                                } else {
+                                    break;
+                                }
                             } else {
                                 break;
                             }
@@ -458,19 +483,35 @@ fn handle_global(
                                                     );
                                                     // Determine the best display name with priority:
                                                     // 1. Window title from X11/Wayland (most accurate)
-                                                    // 2. Binary name if we have it and app name is generic
-                                                    // 3. application.name if it's not generic
-                                                    // 4. Binary name as fallback
-                                                    // 5. application.name as last resort
+                                                    // 2. Ultimate parent process name (for grouping related streams)
+                                                    // 3. Binary name if we have it and app name is generic
+                                                    // 4. application.name if it's not generic
+                                                    // 5. Binary name as fallback
+                                                    // 6. application.name as last resort
                                                     let final_display_name = if let Some(title) =
                                                         window_title.as_ref()
                                                     {
                                                         // Use window title if we got it
                                                         title.clone()
+                                                    } else if let Some(parent) =
+                                                        ultimate_parent_name.as_ref()
+                                                    {
+                                                        // If we have an ultimate parent process (like Discord), use that for grouping
+                                                        // Capitalize first letter for display
+                                                        let mut chars = parent.chars();
+                                                        match chars.next() {
+                                                            None => parent.clone(),
+                                                            Some(first) => {
+                                                                first
+                                                                    .to_uppercase()
+                                                                    .collect::<String>()
+                                                                    + chars.as_str()
+                                                            }
+                                                        }
                                                     } else if app_name_for_log.contains("WEBRTC")
                                                         || app_name_for_log.contains("WebRTC")
                                                     {
-                                                        // For WEBRTC apps, prefer binary name
+                                                        // For WEBRTC apps without a parent, prefer binary name
                                                         if let Some(binary_name) =
                                                             extracted_binary_name.as_ref()
                                                         {
@@ -513,9 +554,9 @@ fn handle_global(
                                                         app_name_for_log.clone()
                                                     };
 
-                                                    // Use the actual app name as the key, not the display name
-                                                    // This ensures routing works correctly when the UI uses display names
-                                                    let final_key = app_name_for_log.clone();
+                                                    // Use the display name as the key to group related streams
+                                                    // This groups Discord Chromium and WEBRTC under "Discord"
+                                                    let final_key = final_display_name.clone();
 
                                                     // Always use AddSinkInputToApp - it will create the app if needed
                                                     let _ = cache_tx.send(
@@ -550,12 +591,21 @@ fn handle_global(
             }
 
             // Fallback if we couldn't get sink info
-            // Use the same priority as above
+            // Use the same priority as above, but also consider ultimate parent
             let final_display_name = if let Some(title) = window_title.as_ref() {
                 // Use window title if we got it
                 title.clone()
+            } else if let Some(parent) = ultimate_parent_name.as_ref() {
+                // If we have an ultimate parent process (like Discord), use that for grouping
+                // This groups Chromium and WEBRTC VoiceEngine under Discord
+                // Capitalize first letter for display
+                let mut chars = parent.chars();
+                match chars.next() {
+                    None => parent.clone(),
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                }
             } else if app_name_for_log.contains("WEBRTC") || app_name_for_log.contains("WebRTC") {
-                // For WEBRTC apps, prefer binary name
+                // For WEBRTC apps without a parent, prefer binary name
                 if let Some(binary_name) = extracted_binary_name.as_ref() {
                     // Capitalize first letter of binary name for display
                     let mut chars = binary_name.chars();
@@ -584,9 +634,9 @@ fn handle_global(
                 app_name_for_log.clone()
             };
 
-            // Use the actual app name as the key, not the display name
-            // This ensures routing works correctly when the UI uses display names
-            let final_key = app_name_for_log.clone();
+            // Use the display name as the key to group related streams together
+            // For example, WEBRTC VoiceEngine with binary=Discord will be grouped under "Discord"
+            let final_key = final_display_name.clone();
 
             // Always use AddSinkInputToApp - it will create the app if needed
             // Use the default sink from config instead of "Unknown"

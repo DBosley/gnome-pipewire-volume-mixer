@@ -93,12 +93,20 @@ var DBusBackend = class DBusBackend {
             applicationRouted: [],
             applicationsChanged: []
         };
+        this._reconnectAttempts = 0;
+        this._reconnectTimer = null;
+        this._maxReconnectAttempts = 10;
+        this._reconnectBaseDelay = 1000; // 1 second
         
         if (DEBUG_MODE) {
             log('Virtual Audio Sinks: Debug mode enabled (PIPEWIRE_MIXER_DEBUG=1)');
         }
         
-        // Try synchronous connection for immediate availability
+        // Try initial connection
+        this._tryConnect();
+    }
+    
+    _tryConnect() {
         try {
             this._proxy = new Gio.DBusProxy.new_for_bus_sync(
                 Gio.BusType.SESSION,
@@ -109,7 +117,17 @@ var DBusBackend = class DBusBackend {
                 DBUS_INTERFACE,
                 null
             );
+            
+            // Watch for daemon disconnection
+            this._proxy.connect('notify::g-name-owner', () => {
+                if (!this._proxy.g_name_owner) {
+                    log('Virtual Audio Sinks: D-Bus service disconnected');
+                    this._handleDisconnection();
+                }
+            });
+            
             this._available = true;
+            this._reconnectAttempts = 0;
             debugLog('Virtual Audio Sinks: D-Bus backend connected, connecting signals...');
             this._connectSignals();
             debugLog('Virtual Audio Sinks: Loading initial state...');
@@ -118,7 +136,47 @@ var DBusBackend = class DBusBackend {
         } catch (e) {
             log(`Virtual Audio Sinks: Failed to connect to D-Bus service: ${e}`);
             this._available = false;
+            this._scheduleReconnect();
         }
+    }
+    
+    _handleDisconnection() {
+        this._available = false;
+        this._disconnectSignals();
+        this._proxy = null;
+        this._scheduleReconnect();
+    }
+    
+    _scheduleReconnect() {
+        if (this._reconnectTimer) {
+            return; // Already scheduled
+        }
+        
+        if (this._reconnectAttempts >= this._maxReconnectAttempts) {
+            log(`Virtual Audio Sinks: Max reconnection attempts (${this._maxReconnectAttempts}) reached`);
+            return;
+        }
+        
+        this._reconnectAttempts++;
+        const delay = Math.min(this._reconnectBaseDelay * Math.pow(2, this._reconnectAttempts - 1), 30000);
+        
+        log(`Virtual Audio Sinks: Scheduling reconnection attempt ${this._reconnectAttempts} in ${delay}ms`);
+        
+        this._reconnectTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._reconnectTimer = null;
+            log(`Virtual Audio Sinks: Attempting to reconnect (attempt ${this._reconnectAttempts})`);
+            this._tryConnect();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+    
+    _disconnectSignals() {
+        this._signalIds.forEach(id => {
+            if (this._proxy) {
+                this._proxy.disconnect(id);
+            }
+        });
+        this._signalIds = [];
     }
     
     _connectSignals() {
@@ -325,67 +383,81 @@ var DBusBackend = class DBusBackend {
     }
     
     setSinkVolume(sinkName, volume) {
-        if (!this._proxy) return false;
-        
-        // Optimistically update cache
-        if (this._cache.sinks[sinkName]) {
-            this._cache.sinks[sinkName].volume = volume;
-        }
-        
-        // Call D-Bus method asynchronously
-        this._proxy.call(
-            'SetSinkVolume',
-            new GLib.Variant('(sd)', [sinkName, volume]),
-            Gio.DBusCallFlags.NONE,
-            -1,
-            null,
-            (obj, res) => {
-                try {
-                    const [success] = this._proxy.call_finish(res).deep_unpack();
-                    if (!success) {
-                        log(`Virtual Audio Sinks: Failed to set volume for ${sinkName}`);
-                        // Reload state on failure
-                        this.refreshState();
-                    }
-                } catch (e) {
-                    log(`Virtual Audio Sinks: Error setting volume: ${e}`);
-                }
+        return new Promise((resolve, reject) => {
+            if (!this._proxy) {
+                reject(new Error('D-Bus proxy not available'));
+                return;
             }
-        );
-        
-        return true;
+            
+            // Optimistically update cache
+            if (this._cache.sinks[sinkName]) {
+                this._cache.sinks[sinkName].volume = volume;
+            }
+            
+            // Call D-Bus method asynchronously
+            this._proxy.call(
+                'SetSinkVolume',
+                new GLib.Variant('(sd)', [sinkName, volume]),
+                Gio.DBusCallFlags.NONE,
+                -1,
+                null,
+                (obj, res) => {
+                    try {
+                        const [success] = this._proxy.call_finish(res).deep_unpack();
+                        if (!success) {
+                            log(`Virtual Audio Sinks: Failed to set volume for ${sinkName}`);
+                            // Reload state on failure
+                            this.refreshState();
+                            reject(new Error(`Failed to set volume for ${sinkName}`));
+                        } else {
+                            resolve(true);
+                        }
+                    } catch (e) {
+                        log(`Virtual Audio Sinks: Error setting volume: ${e}`);
+                        reject(e);
+                    }
+                }
+            );
+        });
     }
     
     setSinkMute(sinkName, muted) {
-        if (!this._proxy) return false;
-        
-        // Optimistically update cache
-        if (this._cache.sinks[sinkName]) {
-            this._cache.sinks[sinkName].muted = muted;
-        }
-        
-        // Call D-Bus method asynchronously
-        this._proxy.call(
-            'SetSinkMute',
-            new GLib.Variant('(sb)', [sinkName, muted]),
-            Gio.DBusCallFlags.NONE,
-            -1,
-            null,
-            (obj, res) => {
-                try {
-                    const [success] = this._proxy.call_finish(res).deep_unpack();
-                    if (!success) {
-                        log(`Virtual Audio Sinks: Failed to set mute for ${sinkName}`);
-                        // Reload state on failure
-                        this.refreshState();
-                    }
-                } catch (e) {
-                    log(`Virtual Audio Sinks: Error setting mute: ${e}`);
-                }
+        return new Promise((resolve, reject) => {
+            if (!this._proxy) {
+                reject(new Error('D-Bus proxy not available'));
+                return;
             }
-        );
-        
-        return true;
+            
+            // Optimistically update cache
+            if (this._cache.sinks[sinkName]) {
+                this._cache.sinks[sinkName].muted = muted;
+            }
+            
+            // Call D-Bus method asynchronously
+            this._proxy.call(
+                'SetSinkMute',
+                new GLib.Variant('(sb)', [sinkName, muted]),
+                Gio.DBusCallFlags.NONE,
+                -1,
+                null,
+                (obj, res) => {
+                    try {
+                        const [success] = this._proxy.call_finish(res).deep_unpack();
+                        if (!success) {
+                            log(`Virtual Audio Sinks: Failed to set mute for ${sinkName}`);
+                            // Reload state on failure
+                            this.refreshState();
+                            reject(new Error(`Failed to set mute for ${sinkName}`));
+                        } else {
+                            resolve(true);
+                        }
+                    } catch (e) {
+                        log(`Virtual Audio Sinks: Error setting mute: ${e}`);
+                        reject(e);
+                    }
+                }
+            );
+        });
     }
     
     routeApp(appName, sinkName) {
@@ -527,6 +599,12 @@ var DBusBackend = class DBusBackend {
     }
     
     destroy() {
+        // Cancel any pending reconnection
+        if (this._reconnectTimer) {
+            GLib.source_remove(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
+        
         // Disconnect all signals
         for (const id of this._signalIds) {
             if (this._proxy) {

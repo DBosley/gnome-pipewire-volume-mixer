@@ -30,8 +30,9 @@ impl PipeWireController {
                 .ok_or_else(|| anyhow::anyhow!("Sink {} not found", sink_name))?
         };
 
-        // Use pactl to set the volume
         let volume_percent = (volume * 100.0) as u32;
+
+        // First set the sink volume (for completeness)
         let output = tokio::process::Command::new("pactl")
             .args(["set-sink-volume", &pipewire_id.to_string(), &format!("{volume_percent}%")])
             .output()
@@ -39,8 +40,51 @@ impl PipeWireController {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            error!("Failed to set volume: {}", stderr);
-            return Err(anyhow::anyhow!("pactl command failed: {}", stderr));
+            error!("Failed to set sink volume: {}", stderr);
+            // Don't fail here, try to set loopback volume anyway
+        }
+
+        // More importantly, find and set the loopback stream volume
+        // This is what actually controls the audio output
+        let pactl_output =
+            tokio::process::Command::new("pactl").args(["list", "sink-inputs"]).output().await?;
+
+        if pactl_output.status.success() {
+            let stdout = String::from_utf8_lossy(&pactl_output.stdout);
+            let blocks: Vec<&str> = stdout.split("Sink Input #").collect();
+
+            for block in blocks {
+                // Look for the loopback stream (e.g., "Game_to_Speaker" for "Game" sink)
+                if block.contains(&format!("node.name = \"{sink_name}_to_Speaker\"")) {
+                    if let Some(id_match) = block.lines().next().and_then(|line| {
+                        line.split_whitespace().next().and_then(|s| s.parse::<u32>().ok())
+                    }) {
+                        debug!("Found loopback stream {} for sink {}", id_match, sink_name);
+
+                        // Set loopback volume - this is what actually controls the audio
+                        let loopback_output = tokio::process::Command::new("pactl")
+                            .args([
+                                "set-sink-input-volume",
+                                &id_match.to_string(),
+                                &format!("{volume_percent}%"),
+                            ])
+                            .output()
+                            .await?;
+
+                        if !loopback_output.status.success() {
+                            let stderr = String::from_utf8_lossy(&loopback_output.stderr);
+                            error!("Failed to set loopback volume: {}", stderr);
+                        } else {
+                            debug!(
+                                "Successfully set loopback stream {} volume to {}%",
+                                id_match, volume_percent
+                            );
+                        }
+
+                        break;
+                    }
+                }
+            }
         }
 
         // Update cache
@@ -68,8 +112,9 @@ impl PipeWireController {
                 .ok_or_else(|| anyhow::anyhow!("Sink {} not found", sink_name))?
         };
 
-        // Use pactl to set the mute state
         let mute_arg = if muted { "1" } else { "0" };
+
+        // First set the sink mute (for completeness)
         let output = tokio::process::Command::new("pactl")
             .args(["set-sink-mute", &pipewire_id.to_string(), mute_arg])
             .output()
@@ -77,8 +122,47 @@ impl PipeWireController {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            error!("Failed to set mute: {}", stderr);
-            return Err(anyhow::anyhow!("pactl command failed: {}", stderr));
+            error!("Failed to set sink mute: {}", stderr);
+            // Don't fail here, try to set loopback mute anyway
+        }
+
+        // More importantly, find and mute/unmute the loopback stream
+        // This is what actually controls the audio output
+        let pactl_output =
+            tokio::process::Command::new("pactl").args(["list", "sink-inputs"]).output().await?;
+
+        if pactl_output.status.success() {
+            let stdout = String::from_utf8_lossy(&pactl_output.stdout);
+            let blocks: Vec<&str> = stdout.split("Sink Input #").collect();
+
+            for block in blocks {
+                // Look for the loopback stream (e.g., "Game_to_Speaker" for "Game" sink)
+                if block.contains(&format!("node.name = \"{sink_name}_to_Speaker\"")) {
+                    if let Some(id_match) = block.lines().next().and_then(|line| {
+                        line.split_whitespace().next().and_then(|s| s.parse::<u32>().ok())
+                    }) {
+                        debug!("Found loopback stream {} for sink {}", id_match, sink_name);
+
+                        // Set loopback mute - this is what actually controls the audio
+                        let loopback_output = tokio::process::Command::new("pactl")
+                            .args(["set-sink-input-mute", &id_match.to_string(), mute_arg])
+                            .output()
+                            .await?;
+
+                        if !loopback_output.status.success() {
+                            let stderr = String::from_utf8_lossy(&loopback_output.stderr);
+                            error!("Failed to set loopback mute: {}", stderr);
+                        } else {
+                            debug!(
+                                "Successfully set loopback stream {} mute to {}",
+                                id_match, muted
+                            );
+                        }
+
+                        break;
+                    }
+                }
+            }
         }
 
         // Update cache
@@ -96,24 +180,30 @@ impl PipeWireController {
     pub async fn route_app(&self, app_name: &str, sink_name: &str) -> Result<()> {
         debug!("Routing app {} to sink {}", app_name, sink_name);
 
-        // Get the sink-input IDs and sink ID
-        let (sink_input_ids, sink_id) = {
+        // First, refresh the sink input IDs by checking pactl
+        let fresh_sink_input_ids = self.get_fresh_sink_input_ids(app_name).await?;
+
+        if fresh_sink_input_ids.is_empty() {
+            return Err(anyhow::anyhow!("App {} has no active sink inputs", app_name));
+        }
+
+        // Get the sink ID
+        let sink_id = {
             let cache = self.cache.read().await;
-            let app = cache
-                .apps
-                .get(app_name)
-                .ok_or_else(|| anyhow::anyhow!("App {} not found", app_name))?;
-
-            if app.sink_input_ids.is_empty() {
-                return Err(anyhow::anyhow!("App {} has no active sink inputs", app_name));
-            }
-
-            let sink_id = cache
+            cache
                 .sinks
                 .get(sink_name)
                 .map(|s| s.pipewire_id)
-                .ok_or_else(|| anyhow::anyhow!("Sink {} not found", sink_name))?;
-            (app.sink_input_ids.clone(), sink_id)
+                .ok_or_else(|| anyhow::anyhow!("Sink {} not found", sink_name))?
+        };
+
+        // Update cache with fresh IDs
+        let sink_input_ids = {
+            let cache = self.cache.write().await;
+            if let Some(mut app) = cache.apps.get_mut(app_name) {
+                app.sink_input_ids = fresh_sink_input_ids.clone();
+            }
+            fresh_sink_input_ids
         };
 
         // Move all sink inputs for this app to the new sink
@@ -168,6 +258,97 @@ impl PipeWireController {
 
         info!("Routed {} to {}", app_name, sink_name);
         Ok(())
+    }
+
+    /// Get fresh sink input IDs for an app from pactl
+    async fn get_fresh_sink_input_ids(&self, app_name: &str) -> Result<Vec<u32>> {
+        debug!("Refreshing sink input IDs for app {}", app_name);
+
+        let output =
+            tokio::process::Command::new("pactl").args(["list", "sink-inputs"]).output().await?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("Failed to list sink inputs"));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut sink_input_ids = Vec::new();
+        let app_name_lower = app_name.to_lowercase();
+
+        // Parse sink inputs to find all streams for our app
+        let mut current_id = None;
+        let mut in_properties = false;
+        let mut current_app_name = String::new();
+        let mut current_binary_name = String::new();
+
+        for line in stdout.lines() {
+            if let Some(id_str) = line.strip_prefix("Sink Input #") {
+                // Process previous sink input if it matches
+                if let Some(id) = current_id {
+                    // Special case: WEBRTC VoiceEngine with Discord binary should be grouped with Discord
+                    if (current_app_name.to_lowercase().contains("webrtc")
+                        && current_binary_name.to_lowercase() == app_name_lower)
+                        || current_app_name.to_lowercase() == app_name_lower
+                        || current_binary_name.to_lowercase() == app_name_lower
+                    {
+                        debug!(
+                            "Found {} sink input: {} (app: {}, binary: {})",
+                            app_name, id, current_app_name, current_binary_name
+                        );
+                        sink_input_ids.push(id);
+                    }
+                }
+
+                // Reset for new sink input
+                current_id = id_str.parse::<u32>().ok();
+                in_properties = false;
+                current_app_name.clear();
+                current_binary_name.clear();
+            } else if line.trim() == "Properties:" {
+                in_properties = true;
+            } else if in_properties && current_id.is_some() {
+                // Collect application.name
+                if let Some(name_line) = line.trim().strip_prefix("application.name = \"") {
+                    if let Some(name_end) = name_line.find('"') {
+                        current_app_name = name_line[..name_end].to_string();
+                    }
+                }
+
+                // Collect application.process.binary
+                if let Some(binary_line) =
+                    line.trim().strip_prefix("application.process.binary = \"")
+                {
+                    if let Some(binary_end) = binary_line.find('"') {
+                        let binary_path = &binary_line[..binary_end];
+                        current_binary_name = binary_path
+                            .split('/')
+                            .next_back()
+                            .unwrap_or(binary_path)
+                            .trim_end_matches("-bin")
+                            .trim_end_matches(".exe")
+                            .to_string();
+                    }
+                }
+            }
+        }
+
+        // Don't forget the last sink input
+        if let Some(id) = current_id {
+            if (current_app_name.to_lowercase().contains("webrtc")
+                && current_binary_name.to_lowercase() == app_name_lower)
+                || current_app_name.to_lowercase() == app_name_lower
+                || current_binary_name.to_lowercase() == app_name_lower
+            {
+                debug!(
+                    "Found {} sink input: {} (app: {}, binary: {})",
+                    app_name, id, current_app_name, current_binary_name
+                );
+                sink_input_ids.push(id);
+            }
+        }
+
+        debug!("Found {} active sink inputs for {}", sink_input_ids.len(), app_name);
+        Ok(sink_input_ids)
     }
 
     /// Get the actual sink an app is connected to by checking PipeWire

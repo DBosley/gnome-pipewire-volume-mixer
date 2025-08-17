@@ -77,20 +77,20 @@ var DaemonBackend = class DaemonBackend {
     setVolume(sinkName, volume) {
         if (!this.isDaemonAvailable()) {
             log('Virtual Audio Sinks: Daemon not available for volume change');
-            return;
+            return Promise.reject(new Error('Daemon not available'));
         }
 
-        this._dbusBackend.setSinkVolume(sinkName, volume);
+        return this._dbusBackend.setSinkVolume(sinkName, volume);
     }
 
     // Set mute state for a sink
     setMute(sinkName, muted) {
         if (!this.isDaemonAvailable()) {
             log('Virtual Audio Sinks: Daemon not available for mute change');
-            return;
+            return Promise.reject(new Error('Daemon not available'));
         }
 
-        this._dbusBackend.setSinkMute(sinkName, muted);
+        return this._dbusBackend.setSinkMute(sinkName, muted);
     }
 
     // Clean up
