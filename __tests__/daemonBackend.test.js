@@ -245,11 +245,11 @@ describe('DaemonBackend', () => {
       expect(mockDBusBackend.setSinkVolume).toHaveBeenCalledWith('Game', 0.8);
     });
 
-    test('should log error when daemon is not available', () => {
+    test('should log error when daemon is not available', async () => {
       mockDBusBackend.isAvailable.mockReturnValue(false);
       const backend = new DaemonBackend();
       
-      backend.setVolume('Game', 0.8);
+      await expect(backend.setVolume('Game', 0.8)).rejects.toThrow('Daemon not available');
       expect(mockDBusBackend.setSinkVolume).not.toHaveBeenCalled();
       expect(mockLogger.getLogs()).toContain('Virtual Audio Sinks: Daemon not available for volume change');
     });
@@ -263,11 +263,11 @@ describe('DaemonBackend', () => {
       expect(mockDBusBackend.setSinkMute).toHaveBeenCalledWith('Game', true);
     });
 
-    test('should log error when daemon is not available', () => {
+    test('should log error when daemon is not available', async () => {
       mockDBusBackend.isAvailable.mockReturnValue(false);
       const backend = new DaemonBackend();
       
-      backend.setMute('Game', true);
+      await expect(backend.setMute('Game', true)).rejects.toThrow('Daemon not available');
       expect(mockDBusBackend.setSinkMute).not.toHaveBeenCalled();
       expect(mockLogger.getLogs()).toContain('Virtual Audio Sinks: Daemon not available for mute change');
     });

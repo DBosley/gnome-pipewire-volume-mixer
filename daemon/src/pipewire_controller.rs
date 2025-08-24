@@ -187,15 +187,13 @@ impl PipeWireController {
             return Err(anyhow::anyhow!("App {} has no active sink inputs", app_name));
         }
 
-        // Get the sink ID
-        let sink_id = {
+        // Verify the sink exists in cache
+        {
             let cache = self.cache.read().await;
-            cache
-                .sinks
-                .get(sink_name)
-                .map(|s| s.pipewire_id)
-                .ok_or_else(|| anyhow::anyhow!("Sink {} not found", sink_name))?
-        };
+            if !cache.sinks.contains_key(sink_name) {
+                return Err(anyhow::anyhow!("Sink {} not found", sink_name));
+            }
+        }
 
         // Update cache with fresh IDs
         let sink_input_ids = {
@@ -207,10 +205,11 @@ impl PipeWireController {
         };
 
         // Move all sink inputs for this app to the new sink
+        // Use the sink NAME not the ID since pactl and pipewire IDs don't match
         for sink_input_id in &sink_input_ids {
-            debug!("Moving sink input {} to sink {}", sink_input_id, sink_id);
+            debug!("Moving sink input {} to sink {}", sink_input_id, sink_name);
             let output = tokio::process::Command::new("pactl")
-                .args(["move-sink-input", &sink_input_id.to_string(), &sink_id.to_string()])
+                .args(["move-sink-input", &sink_input_id.to_string(), sink_name])
                 .output()
                 .await?;
 
@@ -264,6 +263,12 @@ impl PipeWireController {
     async fn get_fresh_sink_input_ids(&self, app_name: &str) -> Result<Vec<u32>> {
         debug!("Refreshing sink input IDs for app {}", app_name);
 
+        // Get stream names from cache if available
+        let stream_names = {
+            let cache = self.cache.read().await;
+            cache.apps.get(app_name).map(|app| app.stream_names.clone()).unwrap_or_default()
+        };
+
         let output =
             tokio::process::Command::new("pactl").args(["list", "sink-inputs"]).output().await?;
 
@@ -285,11 +290,17 @@ impl PipeWireController {
             if let Some(id_str) = line.strip_prefix("Sink Input #") {
                 // Process previous sink input if it matches
                 if let Some(id) = current_id {
+                    // Check if this stream matches our app name, binary name, or any stored stream names
+                    let matches_stream_name = stream_names
+                        .iter()
+                        .any(|stream| stream.to_lowercase() == current_app_name.to_lowercase());
+
                     // Special case: WEBRTC VoiceEngine with Discord binary should be grouped with Discord
                     if (current_app_name.to_lowercase().contains("webrtc")
                         && current_binary_name.to_lowercase() == app_name_lower)
                         || current_app_name.to_lowercase() == app_name_lower
                         || current_binary_name.to_lowercase() == app_name_lower
+                        || matches_stream_name
                     {
                         debug!(
                             "Found {} sink input: {} (app: {}, binary: {})",
@@ -334,10 +345,15 @@ impl PipeWireController {
 
         // Don't forget the last sink input
         if let Some(id) = current_id {
+            let matches_stream_name = stream_names
+                .iter()
+                .any(|stream| stream.to_lowercase() == current_app_name.to_lowercase());
+
             if (current_app_name.to_lowercase().contains("webrtc")
                 && current_binary_name.to_lowercase() == app_name_lower)
                 || current_app_name.to_lowercase() == app_name_lower
                 || current_binary_name.to_lowercase() == app_name_lower
+                || matches_stream_name
             {
                 debug!(
                     "Found {} sink input: {} (app: {}, binary: {})",
@@ -376,24 +392,46 @@ impl PipeWireController {
             let search_pattern = format!("Sink Input #{sink_input_id}");
             if let Some(pos) = stdout.find(&search_pattern) {
                 // Look for the Sink: line in the next few lines
-                let lines = stdout[pos..].lines().take(5);
+                let lines = stdout[pos..].lines().take(20);
+                let mut found_sink_id = None;
                 for line in lines {
                     if let Some(sink_line) = line.trim().strip_prefix("Sink: ") {
                         // Get the sink ID (it's a number)
                         if let Ok(sink_id) = sink_line.parse::<u32>() {
+                            found_sink_id = Some(sink_id);
                             debug!("Found app {} connected to sink ID {}", app_name, sink_id);
-                            // Now look up this sink ID to get its name
-                            let cache = self.cache.read().await;
-                            for entry in cache.sinks.iter() {
-                                let sink = entry.value();
-                                if sink.pipewire_id == sink_id {
-                                    debug!("Sink ID {} maps to sink name {}", sink_id, sink.name);
-                                    return Some(sink.name.clone());
-                                }
-                            }
-                            warn!("Could not find sink name for sink ID {} in cache", sink_id);
+                            break;
                         }
                     }
+                }
+
+                // Now get the sink name from pactl
+                if let Some(sink_id) = found_sink_id {
+                    let sink_output = tokio::process::Command::new("pactl")
+                        .args(["list", "sinks", "short"])
+                        .output()
+                        .await
+                        .ok()?;
+
+                    if sink_output.status.success() {
+                        let sink_stdout = String::from_utf8_lossy(&sink_output.stdout);
+                        for line in sink_stdout.lines() {
+                            let parts: Vec<&str> = line.split_whitespace().collect();
+                            if parts.len() >= 2 {
+                                if let Ok(id) = parts[0].parse::<u32>() {
+                                    if id == sink_id {
+                                        let sink_name = parts[1];
+                                        debug!(
+                                            "Sink ID {} maps to sink name {}",
+                                            sink_id, sink_name
+                                        );
+                                        return Some(sink_name.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    warn!("Could not find sink name for sink ID {} in pactl", sink_id);
                 }
             }
         }

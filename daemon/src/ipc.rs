@@ -105,6 +105,7 @@ async fn process_command(command: &str, cache: &Arc<RwLock<AudioCache>>) -> Resu
                         let app_info = crate::cache::AppInfo {
                             display_name: app_name.to_string(),
                             binary_name: app_name.to_lowercase(),
+                            stream_names: vec![app_name.to_string()], // Use app_name as initial stream name
                             current_sink: sink_name.to_string(),
                             active: false,
                             sink_input_ids: vec![],

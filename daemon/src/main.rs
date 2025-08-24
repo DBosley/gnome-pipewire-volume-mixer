@@ -70,6 +70,7 @@ async fn main() -> Result<()> {
         let mappings_read = app_mappings.read().await;
         for (app_name, sink_name) in &mappings_read.mappings {
             cache_write.remembered_apps.insert(app_name.clone(), sink_name.clone());
+            cache_write.routing_rules.insert(app_name.clone(), sink_name.clone());
             debug!("Restored mapping: {} -> {}", app_name, sink_name);
         }
     }
@@ -125,7 +126,7 @@ async fn main() -> Result<()> {
     });
 
     // Initialize PipeWire monitor
-    let pw_monitor = PipeWireMonitor::new(cache.clone(), config)?;
+    let pw_monitor = PipeWireMonitor::new(cache.clone(), config, controller.clone())?;
 
     // Run PipeWire monitor in main thread
     info!("Starting PipeWire monitoring");

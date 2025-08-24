@@ -32,6 +32,7 @@ fn test_app_operations() {
     let app = AppInfo {
         display_name: "Firefox".to_string(),
         binary_name: "firefox".to_string(),
+        stream_names: vec!["firefox".to_string()],
         current_sink: "Media".to_string(),
         active: true,
         sink_input_ids: vec![123, 456],

@@ -11,17 +11,19 @@ use tracing::{debug, error, info};
 
 use crate::cache::{AppInfo, AudioCache, SinkInfo};
 use crate::config::Config;
+use crate::pipewire_controller::PipeWireController;
 
 pub struct PipeWireMonitor {
     cache: Arc<RwLock<AudioCache>>,
     config: Config,
+    controller: Arc<PipeWireController>,
 }
 
 enum CacheUpdate {
     UpdateSink(String, SinkInfo),
-    MarkAppInactive(u32),                                   // sink_input_id
-    AddSinkInputToApp(String, String, String, u32, String), // app_name, display_name, binary_name, sink_input_id, current_sink
-    CheckRoutingRule(String, u32),                          // app_name, sink_input_id
+    MarkAppInactive(u32), // sink_input_id
+    AddSinkInputToApp(String, String, String, String, u32, String), // app_key, display_name, binary_name, stream_name, sink_input_id, current_sink
+    CheckRoutingRule(String, u32),                                  // app_name, sink_input_id
 }
 
 struct MonitorState {
@@ -36,8 +38,12 @@ struct NodeInfo {
 }
 
 impl PipeWireMonitor {
-    pub fn new(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<Self> {
-        Ok(Self { cache, config })
+    pub fn new(
+        cache: Arc<RwLock<AudioCache>>,
+        config: Config,
+        controller: Arc<PipeWireController>,
+    ) -> Result<Self> {
+        Ok(Self { cache, config, controller })
     }
 
     pub async fn run(self) -> Result<()> {
@@ -45,7 +51,7 @@ impl PipeWireMonitor {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         std::thread::spawn(move || {
-            if let Err(e) = run_pipewire_loop(self.cache, self.config) {
+            if let Err(e) = run_pipewire_loop(self.cache, self.config, self.controller) {
                 error!("PipeWire loop error: {}", e);
                 let _ = tx.send(Err(e));
             } else {
@@ -57,7 +63,11 @@ impl PipeWireMonitor {
     }
 }
 
-fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<()> {
+fn run_pipewire_loop(
+    cache: Arc<RwLock<AudioCache>>,
+    config: Config,
+    controller: Arc<PipeWireController>,
+) -> Result<()> {
     pipewire::init();
 
     let mainloop = MainLoop::new(None)?;
@@ -70,6 +80,8 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
 
     // Spawn a task to handle cache updates
     let cache_clone = cache.clone();
+    let controller_clone = controller.clone();
+    let default_sink = config.routing.default_sink.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
@@ -93,78 +105,71 @@ fn run_pipewire_loop(cache: Arc<RwLock<AudioCache>>, config: Config) -> Result<(
                             }
                         }
                     }
-                    CacheUpdate::AddSinkInputToApp(app_name, display_name, binary_name, sink_input_id, current_sink) => {
-                        if let Some(mut app) = cache.apps.get_mut(&app_name) {
+                    CacheUpdate::AddSinkInputToApp(app_key, display_name, binary_name, stream_name, sink_input_id, current_sink) => {
+                        if let Some(mut app) = cache.apps.get_mut(&app_key) {
                             if !app.sink_input_ids.contains(&sink_input_id) {
                                 app.sink_input_ids.push(sink_input_id);
+                            }
+                            // Add stream name if not already present
+                            if !app.stream_names.contains(&stream_name) {
+                                app.stream_names.push(stream_name);
                             }
                             // Mark as active and clear inactive timestamp
                             app.active = true;
                             app.inactive_since = None;
                             // Update display name if we have a better one
-                            if !display_name.is_empty() && display_name != app_name {
+                            if !display_name.is_empty() && display_name != app_key {
                                 app.display_name = display_name;
                             }
                             // Update sink if it's different (in case of multiple streams)
                             if app.current_sink != current_sink && app.current_sink != "Unknown" {
-                                debug!("App {} has streams in multiple sinks", app_name);
+                                debug!("App {} has streams in multiple sinks", app_key);
                             }
                         } else {
                             // App doesn't exist yet, create it with minimal info
                             let app_info = AppInfo {
                                 display_name,
                                 binary_name,
+                                stream_names: vec![stream_name],
                                 current_sink,
                                 active: true,
                                 sink_input_ids: vec![sink_input_id],
                                 pipewire_id: sink_input_id,  // Use sink_input_id as pipewire_id
                                 inactive_since: None,
                             };
-                            cache.update_app(app_name, app_info);
+                            cache.update_app(app_key, app_info);
                         }
                         cache.increment_generation();
                     }
-                    CacheUpdate::CheckRoutingRule(app_name, sink_input_id) => {
-                        // Check if we have a routing rule for this app
-                        if let Some(target_sink) = cache.routing_rules.get(&app_name) {
-                            let target_sink_name = target_sink.clone();
-                            info!("Applying routing rule: {} -> {}", app_name, target_sink_name);
+                    CacheUpdate::CheckRoutingRule(app_name, _sink_input_id) => {
+                        // Check if we have a routing rule for this app, or use default sink
+                        let target_sink_name = if let Some(target_sink) = cache.routing_rules.get(&app_name) {
+                            let sink_name = target_sink.clone();
+                            info!("Applying routing rule: {} -> {}", app_name, sink_name);
+                            sink_name
+                        } else {
+                            // No routing rule exists, use default sink for new apps
+                            info!("No routing rule for {}, auto-routing to default sink: {}", app_name, default_sink);
+                            
+                            // Save this as a new routing rule for next time
+                            cache.routing_rules.insert(app_name.clone(), default_sink.clone());
+                            default_sink.clone()
+                        };
 
-                            // Move the sink input to the target sink
-                            tokio::spawn(async move {
-                                // Find the sink ID for the target
-                                if let Ok(output) = tokio::process::Command::new("pactl")
-                                    .args(["list", "sinks", "short"])
-                                    .output()
-                                    .await
-                                {
-                                    let stdout = String::from_utf8_lossy(&output.stdout);
-                                    for line in stdout.lines() {
-                                        let parts: Vec<&str> = line.split_whitespace().collect();
-                                        if parts.len() >= 2 && parts[1] == target_sink_name {
-                                            if let Ok(sink_id) = parts[0].parse::<u32>() {
-                                                // Move the sink input
-                                                let _ = std::process::Command::new("pactl")
-                                                    .args([
-                                                        "move-sink-input",
-                                                        &sink_input_id.to_string(),
-                                                        &sink_id.to_string(),
-                                                    ])
-                                                    .output();
-                                                info!(
-                                                    "Routed {} (input #{}) to {} (sink #{})",
-                                                    app_name,
-                                                    sink_input_id,
-                                                    target_sink_name,
-                                                    sink_id
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            });
-                        }
+                        // Use the controller to properly route the app (same as manual routing)
+                        // This ensures loopback streams are set up correctly
+                        let controller = controller_clone.clone();
+                        let app_name_clone = app_name.clone();
+                        tokio::spawn(async move {
+                            // Give the app a moment to fully initialize
+                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                            
+                            if let Err(e) = controller.route_app(&app_name_clone, &target_sink_name).await {
+                                error!("Failed to apply routing for {}: {}", app_name_clone, e);
+                            } else {
+                                info!("Successfully routed {} to {}", app_name_clone, target_sink_name);
+                            }
+                        });
                     }
                 }
             }
@@ -567,6 +572,7 @@ fn handle_global(
                                                                 .as_ref()
                                                                 .unwrap_or(&app_name_for_log)
                                                                 .clone(),
+                                                            app_name_for_log.clone(), // The actual stream name
                                                             app_id,
                                                             sink_name,
                                                         ),
@@ -644,6 +650,7 @@ fn handle_global(
                 final_key.clone(),
                 final_display_name.clone(),
                 extracted_binary_name.as_ref().unwrap_or(&app_name_for_log).clone(),
+                app_name_for_log.clone(), // The actual stream name
                 app_id,
                 default_sink,
             ));

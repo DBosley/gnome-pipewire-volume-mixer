@@ -16,6 +16,7 @@ pub struct SinkInfo {
 pub struct AppInfo {
     pub display_name: String,
     pub binary_name: String,
+    pub stream_names: Vec<String>, // The actual PipeWire stream names (e.g., ["game.exe", "WEBRTC VoiceEngine"])
     pub current_sink: String,
     pub active: bool,
     pub sink_input_ids: Vec<u32>,

@@ -205,14 +205,25 @@ describe('DBusBackend', () => {
   });
 
   describe('setSinkVolume', () => {
-    test('should call D-Bus method and update cache optimistically', () => {
+    test('should call D-Bus method and update cache optimistically', async () => {
       const backend = new DBusBackend();
       
-      const result = backend.setSinkVolume('Game', 0.9);
-      expect(result).toBe(true);
+      // Mock successful D-Bus call
+      mockProxy.call_finish.mockReturnValue({
+        deep_unpack: () => [true]
+      });
       
-      // Check optimistic update
+      const promise = backend.setSinkVolume('Game', 0.9);
+      
+      // Check optimistic update happens immediately
       expect(backend._cache.sinks.Game.volume).toBe(0.9);
+      
+      // Simulate async callback
+      const callback = mockProxy.call.mock.calls[0][5];
+      callback(mockProxy, {});
+      
+      const result = await promise;
+      expect(result).toBe(true);
       
       // Check D-Bus call
       expect(mockProxy.call).toHaveBeenCalledWith(
@@ -228,26 +239,36 @@ describe('DBusBackend', () => {
       );
     });
 
-    test('should return false when no proxy available', () => {
+    test('should reject when no proxy available', async () => {
       gnomeMocks.mockGio.DBusProxy.new_for_bus_sync.mockImplementation(() => {
         throw new Error('Connection failed');
       });
       
       const backend = new DBusBackend();
-      const result = backend.setSinkVolume('Game', 0.9);
-      expect(result).toBe(false);
+      await expect(backend.setSinkVolume('Game', 0.9)).rejects.toThrow('D-Bus proxy not available');
     });
   });
 
   describe('setSinkMute', () => {
-    test('should call D-Bus method and update cache optimistically', () => {
+    test('should call D-Bus method and update cache optimistically', async () => {
       const backend = new DBusBackend();
       
-      const result = backend.setSinkMute('Game', true);
-      expect(result).toBe(true);
+      // Mock successful D-Bus call
+      mockProxy.call_finish.mockReturnValue({
+        deep_unpack: () => [true]
+      });
       
-      // Check optimistic update
+      const promise = backend.setSinkMute('Game', true);
+      
+      // Check optimistic update happens immediately
       expect(backend._cache.sinks.Game.muted).toBe(true);
+      
+      // Simulate async callback
+      const callback = mockProxy.call.mock.calls[0][5];
+      callback(mockProxy, {});
+      
+      const result = await promise;
+      expect(result).toBe(true);
       
       // Check D-Bus call
       expect(mockProxy.call).toHaveBeenCalledWith(

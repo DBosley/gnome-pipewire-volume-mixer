@@ -106,6 +106,7 @@ fn test_snapshot_performance() {
             AppInfo {
                 display_name: format!("App_{i}"),
                 binary_name: format!("app_{i}"),
+                stream_names: vec![format!("app_{i}")],
                 current_sink: "Game".to_string(),
                 active: true,
                 sink_input_ids: vec![i * 2, i * 2 + 1],
@@ -138,6 +139,7 @@ fn test_memory_cleanup() {
             AppInfo {
                 display_name: format!("InactiveApp_{i}"),
                 binary_name: format!("inactive_{i}"),
+                stream_names: vec![format!("inactive_{i}")],
                 current_sink: "Game".to_string(),
                 active: false,
                 sink_input_ids: vec![],
@@ -154,6 +156,7 @@ fn test_memory_cleanup() {
             AppInfo {
                 display_name: format!("ActiveApp_{i}"),
                 binary_name: format!("active_{i}"),
+                stream_names: vec![format!("active_{i}")],
                 current_sink: "Media".to_string(),
                 active: true,
                 sink_input_ids: vec![i],
@@ -187,6 +190,7 @@ fn test_routing_rules_persistence() {
         AppInfo {
             display_name: "Firefox".to_string(),
             binary_name: "firefox".to_string(),
+            stream_names: vec!["firefox".to_string()],
             current_sink: "Media".to_string(),
             active: true,
             sink_input_ids: vec![1],
@@ -228,6 +232,7 @@ fn test_cache_with_special_characters() {
             AppInfo {
                 display_name: name.to_string(),
                 binary_name: "test".to_string(),
+                stream_names: vec!["test".to_string()],
                 current_sink: "Game".to_string(),
                 active: true,
                 sink_input_ids: vec![1],
@@ -300,6 +305,7 @@ fn test_wine_app_detection() {
             AppInfo {
                 display_name: expected_display.to_string(),
                 binary_name: binary_name.to_string(),
+                stream_names: vec![binary_name.to_string()],
                 current_sink: "Game".to_string(),
                 active: true,
                 sink_input_ids: vec![1],
@@ -335,6 +341,7 @@ fn test_cache_memory_usage() {
             AppInfo {
                 display_name: format!("Very_Long_App_Display_Name_To_Test_Memory_{i}"),
                 binary_name: format!("very_long_binary_name_to_test_memory_{i}"),
+                stream_names: vec![format!("very_long_binary_name_to_test_memory_{i}")],
                 current_sink: format!("Sink_{}", i % 10),
                 active: i % 2 == 0,
                 sink_input_ids: vec![i * 2, i * 2 + 1],

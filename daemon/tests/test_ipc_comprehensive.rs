@@ -117,6 +117,7 @@ async fn test_ipc_health_command() {
             AppInfo {
                 display_name: "TestApp".to_string(),
                 binary_name: "testapp".to_string(),
+                stream_names: vec!["testapp".to_string()],
                 current_sink: "Game".to_string(),
                 active: true,
                 sink_input_ids: vec![1, 2],
@@ -317,6 +318,7 @@ async fn test_ipc_stress_test() {
                     AppInfo {
                         display_name: format!("StressApp_{i}"),
                         binary_name: format!("stressapp_{i}"),
+                        stream_names: vec![format!("stressapp_{i}")],
                         current_sink: ["Game", "Chat", "Media"][i % 3].to_string(),
                         active: i % 2 == 0,
                         sink_input_ids: vec![i as u32],

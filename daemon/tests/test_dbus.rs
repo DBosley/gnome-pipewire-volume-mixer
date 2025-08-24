@@ -29,6 +29,7 @@ async fn test_dbus_service_starts() {
             AppInfo {
                 display_name: "TestApp".to_string(),
                 binary_name: "testapp".to_string(),
+                stream_names: vec!["testapp".to_string()],
                 current_sink: "TestSink".to_string(),
                 active: true,
                 sink_input_ids: vec![100],

@@ -26,6 +26,7 @@ async fn test_memory_leak_detection() {
                 AppInfo {
                     display_name: format!("TempApp_{i}"),
                     binary_name: format!("tempapp_{i}"),
+                    stream_names: vec![format!("tempapp_{i}")],
                     current_sink: "Game".to_string(),
                     active: true,
                     sink_input_ids: vec![i],
@@ -116,6 +117,7 @@ async fn test_update_latency_under_stress() {
                 AppInfo {
                     display_name: format!("App_{i}"),
                     binary_name: format!("app_{i}"),
+                    stream_names: vec![format!("app_{i}")],
                     current_sink: ["Game", "Chat", "Media"][i % 3].to_string(),
                     active: i % 2 == 0,
                     sink_input_ids: vec![i as u32],
@@ -175,6 +177,7 @@ async fn test_large_scale_app_handling() {
                 AppInfo {
                     display_name: format!("Application {i}"),
                     binary_name: format!("app_{i}"),
+                    stream_names: vec![format!("app_{i}")],
                     current_sink: ["Game", "Chat", "Media"][i % 3].to_string(),
                     active: i < 20, // Only 20 active
                     sink_input_ids: if i < 20 { vec![i as u32] } else { vec![] },
@@ -238,6 +241,7 @@ async fn test_snapshot_generation_performance() {
                 AppInfo {
                     display_name: format!("Application {i}"),
                     binary_name: format!("app_{i}"),
+                    stream_names: vec![format!("app_{i}")],
                     current_sink: format!("Sink_{}", i % 13),
                     active: true,
                     sink_input_ids: vec![i as u32 * 2, i as u32 * 2 + 1],

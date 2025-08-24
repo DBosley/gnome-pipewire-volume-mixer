@@ -68,6 +68,7 @@ async fn main() -> Result<()> {
             AppInfo {
                 display_name: "Firefox".to_string(),
                 binary_name: "firefox".to_string(),
+                stream_names: vec!["Firefox".to_string()],
                 current_sink: "Media".to_string(),
                 active: true,
                 sink_input_ids: vec![200],
@@ -81,6 +82,7 @@ async fn main() -> Result<()> {
             AppInfo {
                 display_name: "Discord".to_string(),
                 binary_name: "discord".to_string(),
+                stream_names: vec!["Discord".to_string()],
                 current_sink: "Chat".to_string(),
                 active: false,
                 sink_input_ids: vec![],
